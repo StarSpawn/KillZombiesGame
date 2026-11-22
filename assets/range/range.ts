@@ -4,7 +4,7 @@ import { createBoxGeometry, createMeshBuilder } from '@forgeax/engine/geometry';
 import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine/input';
 import { color, mat4, quat } from '@forgeax/engine/math';
 import type { Plugin } from '@forgeax/engine/plugin';
-import { Camera, DirectionalLight, Fog, FogModeValue, Instances, Materials, MeshFilter, MeshRenderer, Skylight, perspective } from '@forgeax/engine/render';
+import { Camera, DirectionalLight, Fog, FogModeValue, Instances, Materials, MeshFilter, MeshRenderer, ShadowParticipation, Skylight, perspective } from '@forgeax/engine/render';
 import { Transform } from '@forgeax/engine/scene';
 import type { Asset, AssetHandle, MeshAsset } from '@forgeax/engine/types';
 import { FragmentPool, PARTS, SMALL_LIMIT, hitPart, createBodyDamage, remainingBoxes, breakAt, type BodyDamage, type Hit, type Fragment, type Box, type Vec3 } from './fracture.ts';
@@ -186,13 +186,14 @@ export const voxelRange: Plugin.Object = {
         spawned.push(entity);
         return entity;
       };
-      const batch = (assetHandle: AssetHandle<'mesh'>, material: AssetHandle<'material'>, capacity: number) => {
+      const batch = (assetHandle: AssetHandle<'mesh'>, material: AssetHandle<'material'>, capacity: number, castsShadow = true) => {
         const entity = world.spawn(
           { component: Transform, data: {} },
           { component: MeshFilter, data: { assetHandle } },
           { component: MeshRenderer, data: { materials: [material] } },
           { component: Instances, data: { transforms: emptyTransforms } },
         ).unwrap();
+        if (!castsShadow) world.addComponent(entity, { component: ShadowParticipation, data: { cast: false } }).unwrap();
         spawned.push(entity);
         const buffer = new Float32Array(capacity * 16);
         let size = 0;
@@ -217,12 +218,17 @@ export const voxelRange: Plugin.Object = {
 
       const tintPalette = (hexes: string[]) => hexes.map(hex => color.linearRgb(parseInt(hex.slice(1), 16)));
       const streetPalette=tintPalette(streetColors);
+      const sectionLength=82;
       const sections=new Map<number,Box[]>();
+      const roadBase:Box[]=[];
       for(const box of scenery){
-        const section=Math.floor(box.z/82);
+        // Keep long road surfaces from extending the bounds of local scenery.
+        if(box.sz>sectionLength*2){roadBase.push(box);continue;}
+        const section=Math.floor(box.z/sectionLength);
         if(!sections.has(section))sections.set(section,[]);
         sections.get(section)!.push(box);
       }
+      if(roadBase.length)mesh(retain(mergeBoxes(roadBase,zero,streetPalette)),bodyMaterial,zero,unit);
       for(const boxes of sections.values())mesh(retain(mergeBoxes(boxes,zero,streetPalette)),bodyMaterial,zero,unit);
       const crowdSize=spawnPositions().length;
       const gunMeshes = Object.fromEntries(GUNS.map(g => [g, retain(viewModel(gunBoxes(g), tintPalette(gunColors))) ])) as Record<Gun, AssetHandle<'mesh'>>;
@@ -254,11 +260,16 @@ export const voxelRange: Plugin.Object = {
       const flames=['#ec682b','#ffca63'].map(c=>batch(boxMesh,retain(Materials.unlit(c)),fires.length*8));
       const smoke=batch(boxMesh,retain(Materials.standard({baseColor:'#68696a',roughness:1})),fires.length*8);
       const rainCount=620;
-      const rainfall=batch(boxMesh,retain(Materials.unlit('#899aa2')),rainCount);
+      const rainfall=batch(boxMesh,retain(Materials.unlit('#899aa2')),rainCount,false);
+      const rainRotation=quat.fromEuler(quat.create(),0,0,.13,'XYZ');
+      // Conservative radius of the largest .013 × .30 × .013 rain box.
+      const rainRadius=.16;
       // Stable world-space seeds keep the streaks falling past the player during turns.
       const drops=Array.from({length:rainCount},(_,i)=>{
         const hash=(k:number)=>{const v=Math.sin(i*93.37+k*17.31)*43758.54;return v-Math.floor(v);};
-        return {x:hash(1)*32,y:hash(2)*12,z:hash(3)*32,speed:8+hash(4)*4,size:.16+hash(5)*.14};
+        const matrix=mat4.create();
+        mat4.compose(matrix,zero,rainRotation,[.013,.16+hash(5)*.14,.013]);
+        return {x:hash(1)*32,y:hash(2)*12,z:hash(3)*32,speed:8+hash(4)*4,matrix};
       });
       const wrap=(v:number,span:number)=>v-span*Math.floor(v/span);
       const light = world.spawn({ component: DirectionalLight, data: {
@@ -463,8 +474,8 @@ export const voxelRange: Plugin.Object = {
         if (result.collapsed) { kills++; wallet.cash += BOUNTY; tell('击杀  +$'+BOUNTY); save(); }
       }
 
-      function nearest(origin: Vec3, direction: Vec3) {
-        let closest = wallDistance(origin,direction,door);
+      function nearest(origin: Vec3, direction: Vec3, wall: number) {
+        let closest = wall;
         let result: { zombie: Zombie; hit: Hit } | undefined;
         for (const zombie of zombies) {
           if (zombie.body.destroyed) continue;
@@ -493,8 +504,9 @@ export const voxelRange: Plugin.Object = {
           const offset=shotOffset(weapon,shots,p,aiming,kick);
           if(!p)lastSpread=offset;
           const direction=normalized(forward.map((n,i)=>n+right[i]*offset.x+vertical[i]*offset.y) as Vec3);
-          const impact=nearest(eye,direction);
-          const length=impact?.hit.t ?? Math.min(100,wallDistance(eye,direction,door));
+          const wall=wallDistance(eye,direction,door);
+          const impact=nearest(eye,direction,wall);
+          const length=impact?.hit.t ?? Math.min(100,wall);
           const end=eye.map((n,i)=>n+direction[i]*length) as Vec3;
           if(tracers.length>=36)tracers.shift();
           tracers.push({start:muzzle,end,life:.065,width:.012});
@@ -590,9 +602,9 @@ export const voxelRange: Plugin.Object = {
             const canStand=(nx:number,nz:number)=>!blocksPlayer(nx,nz,feet,door)&&!zombies.some(v=>!v.body.destroyed &&
               Math.hypot(nx-v.position[0],nz-v.position[2])<.70 && (feet<.8||v.motion.mode==='chase'||v.motion.mode==='hop'));
             const nx=x+(Math.cos(yaw)*horiz+Math.sin(yaw)*ahead)*speed;
-            if(canStand(nx,z))x=nx;
+            if(nx!==x && canStand(nx,z))x=nx;
             const nz=z+(Math.sin(yaw)*horiz-Math.cos(yaw)*ahead)*speed;
-            if(canStand(x,nz))z=nz;
+            if(nz!==z && canStand(x,nz))z=nz;
             if(door==='open' && z<-.55){setDoor('locked');tell('已跃出安全屋');state();}
             if(moving)stride+=dt*9;
             farthest=Math.max(farthest,Math.min(DISTANCE,Math.floor(START-z)));
@@ -623,14 +635,17 @@ export const voxelRange: Plugin.Object = {
           }
           flames.forEach(layer=>layer.publish()); smoke.publish();
           rainfall.clear();
-          quat.fromEuler(rotation,0,0,.13,'XYZ');
           for(const drop of drops){
             const px=eye[0]-16+wrap(drop.x+elapsed*drop.speed*.13-eye[0]+16,32);
             const pz=eye[2]-16+wrap(drop.z-eye[2]+16,32);
             const py=wrap(drop.y-elapsed*drop.speed,12);
             if(Math.abs(px-ROOM_X)<5.45 && pz>-.6 && pz<10.6 && py<ROOM_FLOOR+4.45)continue;
-            mat4.compose(transform,[px,py,pz],rotation,[.013,drop.size,.013]);
-            rainfall.push(transform);
+            const depth=(px-eye[0])*forward[0]+(py-eye[1])*forward[1]+(pz-eye[2])*forward[2];
+            if(depth < -rainRadius)continue;
+            drop.matrix[12]=px;
+            drop.matrix[13]=py;
+            drop.matrix[14]=pz;
+            rainfall.push(drop.matrix);
           }
           rainfall.publish();
           if(phase==='run' && !shop && restored && mouse?.pointerLocked && (mouse.justPressed(0)||mouse.button(0))) shoot();
