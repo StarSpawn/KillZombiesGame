@@ -15,8 +15,25 @@ export default async function playthrough(play){
   await page.keyboard.down('KeyA');await advance(.70);await page.keyboard.up('KeyA');
   await advance(2.3);s=await state();
   assert.ok(s.spawned>1 && s.total===4 && s.hp===100);
-  await shot('tower-and-incoming-wave');
-  await advance(10);
+  const scan=async(angle,name)=>{
+    const before=await state();
+    const delta=Math.round((angle-before.yaw)/.0023);
+    mx+=delta;
+    await page.mouse.move(mx,my,{steps:Math.max(1,Math.ceil(Math.abs(delta)/110))});
+    await play.advance(.24,{read,stepSeconds:.04,render:true});
+    const view=await state();assert.ok(Math.abs(view.yaw-angle)<.05);
+    await shot(name);
+  };
+  await scan(-1.35,'FB-016-west-fence');
+  await scan(-Math.PI,'FB-016-rear-rail-yard');
+  await scan(-4.9,'FB-016-east-fence');
+  await scan(-2*Math.PI,'FB-015-west-berlin');
+  // Return yaw to its original turn before using absolute aiming targets.
+  await scan(0,'FB-017-street-entrances');
+  for(let i=0;i<15 && !(await state()).bodies.some(b=>b.z>-16);i++)await advance(1);
+  assert.ok((await state()).bodies.some(b=>b.z>-16 && b.z<-7));
+  await shot('FB-017-emergence');
+  await advance(3);
   await page.mouse.down({button:'right'});await advance(.24);
   const look=async(yaw,pitch)=>{
     for(let i=0;i<4;i++){
@@ -43,7 +60,7 @@ export default async function playthrough(play){
   assert.match(await page.locator('[data-choice="1"]').innerText(),/普通丧尸 × 6/);
   await click('wave-1');await phase('run');
   s=await state();assert.equal(s.wave,2);assert.equal(s.total,6);assert.equal(s.hp,100);
-  for(let i=0;i<6 && (await state()).hp===100;i++)await advance(3);
+  for(let i=0;i<15 && (await state()).hp===100;i++)await advance(3);
   s=await state();assert.ok(s.hp>0 && s.hp<100);
   await shot('attack-on-fence');await advance(35);await phase('down');
   assert.equal((await state()).hp,0);await shot('fence-breached');

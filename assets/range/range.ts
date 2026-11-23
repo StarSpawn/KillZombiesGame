@@ -15,12 +15,13 @@ import { SHOTGUN_PELLETS } from './weapons.ts';
 import { GUNS, ARMORY, BOUNTY, shotOffset, ammunition, equip, initialWallet, restoreWallet, refill, type Gun } from './loadout.ts';
 import { gunBoxes, type ViewPiece, sightHeight, gunColors, supportHand, feedBoxes, reloadPose } from './gun-model.ts';
 import { waveCount, waveChoices } from './waves.ts';
-import { DECK, FENCE_Z, MAX_LIVE, spawnPoint, outpost, gate, colors } from './outpost.ts';
+import { DECK, FENCE_Z, MAX_LIVE, entryPath, panel, fenceBays, outpost, gate, colors } from './outpost.ts';
+import { district, districtColors, firstBuilding } from './district.ts';
 import { outfits, bodyColors, firstFleshColor, compactVoxels, dressVoxel } from './outfits.ts';
 
 type Phase = 'intro' | 'run' | 'down' | 'supply' | 'choose';
 type Zombie = {
-  position: Vec3; motion: Motion; body: BodyDamage; remainsUntil: number; swing:number; outfit:number;
+  position: Vec3; route:Vec3[]; waypoint:number; motion: Motion; body: BodyDamage; remainsUntil: number; swing:number; outfit:number;
   wounds: number[]; damaged: Map<number, EntityHandle>; dirty: Set<number>;
 };
 
@@ -220,6 +221,15 @@ export const voxelRange: Plugin.Object = {
       const tintPalette = (hexes: string[]) => hexes.map(hex => color.linearRgb(parseInt(hex.slice(1), 16)));
       const sceneColors=tintPalette(colors);
       mesh(retain(viewModel(outpost,sceneColors)),bodyMaterial,zero,unit);
+      mesh(retain(mergeBoxes(district,zero,tintPalette(districtColors))),bodyMaterial,zero,unit);
+      const singlePanel=retain(viewModel(panel,sceneColors));
+      const eightPanels=Array.from({length:8},(_,i)=>panel.map(b=>({...b,x:b.x+i*3}))).flat();
+      const panelGroup=retain(viewModel(eightPanels,sceneColors));
+      for(let i=0;i<fenceBays.length;){
+        const bay=fenceBays[i], grouped=fenceBays[i+7]===bay+7;
+        mesh(grouped?panelGroup:singlePanel,bodyMaterial,[bay*3,0,0],unit);
+        i+=grouped?8:1;
+      }
       const fence=mesh(retain(viewModel(gate,sceneColors)),bodyMaterial,zero,unit);
       const crowdSize=MAX_LIVE+8;
       const gunMeshes = Object.fromEntries(GUNS.map(g => [g, retain(viewModel(gunBoxes(g), tintPalette(gunColors))) ])) as Record<Gun, AssetHandle<'mesh'>>;
@@ -289,7 +299,7 @@ export const voxelRange: Plugin.Object = {
       let lastImpact: {part:number;collapsed:boolean}|null=null;
       let lastSpread={x:0,y:0};
       let notice='',noticeFor=0,hitMarker=0;
-      let x=0,z=3.4,feet=DECK,jumpSpeed=0,yaw=0,pitch=-.18,stride=0;
+      let x=0,z=1.85,feet=DECK,jumpSpeed=0,yaw=0,pitch=-.18,stride=0;
       let eye: Vec3 = [0,DECK+1.68,3.4], forward: Vec3 = [0,0,-1], right: Vec3 = [1,0,0], vertical: Vec3 = [0,1,0];
       let width = 0, height = 0, lastFov = -1, lastState = 0;
       function snapshot() {
@@ -366,7 +376,7 @@ export const voxelRange: Plugin.Object = {
         for(const entity of dynamicEntities)world.despawn(entity).unwrap();
         dynamicEntities.clear();largeMeshes.clear();zombies.length=0;tracers.length=0;blood.clear();fragments.reset();
         wave=level;spawnedCount=0;spawnIn=0;hp=100;kills=shots=0;
-        x=0;z=3.4;feet=DECK;jumpSpeed=0;yaw=0;pitch=-.18;stride=0;
+        x=0;z=1.85;feet=DECK;jumpSpeed=0;yaw=0;pitch=-.18;stride=0;
         hurt=hitMarker=cooldown=reload=aimBlend=recoil=kick=sway=0;aiming=false;lastImpact=null;
         ammo=ammunition();
         for(const g of GUNS)ammo[g].spare=Math.max(ammo[g].spare,waveCount(level)*(g==='shotgun'?3:8));
@@ -377,10 +387,10 @@ export const voxelRange: Plugin.Object = {
       function reinforce(dt:number){
         spawnIn-=dt;
         if(spawnIn>0 || spawnedCount>=waveCount(wave) || zombies.filter(v=>!v.body.destroyed).length>=MAX_LIVE)return;
-        const position=spawnPoint(spawnedCount,wave);
-        const zombie:Zombie={position,motion:createMotion(),body:createBodyDamage(),swing:0,
+        const route=entryPath(spawnedCount,wave),position:Vec3=[...route[0]];
+        const zombie:Zombie={position,route,waypoint:1,motion:createMotion(),body:createBodyDamage(),swing:0,
           outfit:(spawnedCount*8+wave-1)%outfits.length,remainsUntil:0,damaged:new Map(),dirty:new Set(),wounds:[0,0,0,0,0,0]};
-        walk(zombie.motion,zombie.body,position,[position[0],0,FENCE_Z],0,0);
+        walk(zombie.motion,zombie.body,position,route[1],0,0);
         zombies.push(zombie);spawnedCount++;spawnIn=Math.max(.95,2.1-wave*.09);
       }
 
@@ -479,7 +489,7 @@ export const voxelRange: Plugin.Object = {
           const offset=shotOffset(weapon,shots,p,aiming,kick);
           if(!p)lastSpread=offset;
           const direction=normalized(forward.map((n,i)=>n+right[i]*offset.x+vertical[i]*offset.y) as Vec3);
-          const wall=direction[1]<0 ? Math.min(120,-eye[1]/direction[1]) : 120;
+          const wall=firstBuilding(eye,direction,direction[1]<0 ? Math.min(120,-eye[1]/direction[1]) : 120);
           const impact=nearest(eye,direction,wall);
           const length=impact?.hit.t ?? Math.min(100,wall);
           const end=eye.map((n,i)=>n+direction[i]*length) as Vec3;
@@ -583,7 +593,7 @@ export const voxelRange: Plugin.Object = {
             const px=eye[0]-16+wrap(drop.x+elapsed*drop.speed*.13-eye[0]+16,32);
             const pz=eye[2]-16+wrap(drop.z-eye[2]+16,32);
             const py=wrap(drop.y-elapsed*drop.speed,12);
-            if(Math.abs(px)<4.8 && pz>-.3 && pz<7.1 && py<7)continue;
+            if(Math.abs(px)<4.8 && pz>-.3 && pz<7.1 && py<DECK+3.8)continue;
             const depth=(px-eye[0])*forward[0]+(py-eye[1])*forward[1]+(pz-eye[2])*forward[2];
             if(depth < -rainRadius)continue;
             drop.matrix[12]=px;
@@ -618,7 +628,13 @@ export const voxelRange: Plugin.Object = {
             const pos=zombie.position;
             if(phase==='run'){
               const windup=pos[2]>=FENCE_Z-.65 ? Math.max(0,1-zombie.swing/.5) : 0;
-              walk(zombie.motion,zombie.body,pos,[pos[0],0,FENCE_Z+.6],i*.81,dt*1.8,windup);
+              let target=zombie.route[zombie.waypoint];
+              if(zombie.waypoint<zombie.route.length-1){
+                const dx=target[0]-pos[0],dz=target[2]-pos[2],distance=Math.hypot(dx,dz);
+                if(distance<.16)target=zombie.route[++zombie.waypoint];
+                else target=[target[0]+1.18*dx/distance,0,target[2]+1.18*dz/distance];
+              }
+              walk(zombie.motion,zombie.body,pos,target,i*.81,dt*1.8,windup);
               if(pos[2]>=FENCE_Z-.65){
                 zombie.swing-=dt;
                 if(zombie.swing<=0){
