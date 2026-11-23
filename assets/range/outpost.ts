@@ -1,10 +1,23 @@
 import type { Box, Vec3 } from './fracture.ts';
 
 export const DECK=4.6, FENCE_Z=-6, MAX_LIVE=12;
+// Shared street coordinates keep entrances aligned with the district mesh.
+export const CITY_SHIFT=18, ENTRY_X=33, FRONT=-17-CITY_SHIFT, ROOF_Y=7, WINDOW_Y=3.1;
+export const entryKinds=['alley','shop','window','roof'] as const;
+export function entryKind(index:number,wave:number){return entryKinds[(index+wave-1)%entryKinds.length];}
 export function entryPath(index:number,wave:number):Vec3[]{
-  const side=(index+wave)%2 ? -1 : 1, lane=(index*3+wave)%5;
-  const laneX=side*(1.15+.61*lane), back=-27-(index%3)*.5;
-  return [[side*(12+lane),0,back],[laneX,0,back],[laneX,0,-14.9],[side*(1.5+lane*1.64),0,FENCE_Z+.6]];
+  const lane=(index*3+wave)%5, side=(Math.floor(index/4)+wave)%2?-1:1;
+  const kind=entryKind(index,wave),end:Vec3=[(kind==='alley'?side:kind==='window'?1:-1)*(1.5+lane*1.64),0,FENCE_Z+.6];
+  if(kind==='alley'){
+    const laneX=side*(1.15+.61*lane),back=-27-(index%3)*.5-CITY_SHIFT;
+    return [[side*(12+lane),0,back],[laneX,0,back],[laneX,0,FRONT+3],end];
+  }
+  if(kind==='roof'){
+    const cx=-ENTRY_X, y=ROOF_Y;
+    return [[cx,y,FRONT-7],[cx+5.8,y,FRONT-7],[cx+5.8,y,FRONT+1],[cx+5.8,0,FRONT+1.8],end];
+  }
+  const cx=kind==='shop'?-ENTRY_X:ENTRY_X,y=kind==='shop'?0:WINDOW_Y;
+  return [[cx+Math.sign(cx)*6.4,y,FRONT-3],[cx,y,FRONT-3],[cx,y,FRONT+1],[cx,0,FRONT+2],end];
 }
 
 type Piece=Box & {roll?:number};

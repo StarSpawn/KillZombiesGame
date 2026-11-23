@@ -93,7 +93,7 @@ export function walk(motion: Motion, body: BodyDamage, position: Vec3, target: V
   mat4.compose(motion.rootMatrix, position, motion.bodyRotation, bodyScale);
   const m = motion.rootMatrix;
   motion.origin[0] = position[0] - m[4] * rootPivot[1];
-  motion.origin[1] = hipHeight*BODY_SCALE - m[5] * rootPivot[1];
+  motion.origin[1] = position[1] + hipHeight*BODY_SCALE - m[5] * rootPivot[1];
   motion.origin[2] = position[2] - m[6] * rootPivot[1];
 
   for (const [part, pose] of motion.parts.entries()) {

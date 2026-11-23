@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { Vec3 } from '../fracture.ts';
-import { DECK, entryPath, FENCE_Z, fenceBays } from '../outpost.ts';
+import { DECK, entryPath, entryKind, FENCE_Z, fenceBays } from '../outpost.ts';
+import { waveCount, waveChoices } from '../waves.ts';
+import { ARMORY, BOUNTY, equip, initialWallet, restoreWallet } from '../loadout.ts';
 import { firstBuilding } from '../district.ts';
 
 function sight(from:Vec3,to:Vec3){
@@ -10,12 +12,21 @@ function sight(from:Vec3,to:Vec3){
 }
 
 describe('Berlin street entrances',()=>{
+  it('lists the larger waves and lets the player buy the rifle with the first clear',()=>{
+    expect([1,2,3].map(waveCount)).toEqual([8,12,16]);
+    expect(waveChoices(1,1)).toEqual([1,2]);
+    const wallet=initialWallet();wallet.cash=waveCount(1)*BOUNTY;
+    expect(wallet.cash).toBe(ARMORY.mosin.price);
+    expect(equip(wallet,'mosin')).toBe(true);
+    expect(wallet.cash).toBe(0);
+    expect(restoreWallet(wallet).owned).toEqual(['g18','mosin']);
+  });
   it('conceals the entire spawning body even at the extremes of the jumping platform',()=>{
     for(let wave=1;wave<=2;wave++)for(let i=0;i<30;i++){
       const [start]=entryPath(i,wave);
       for(const x of [-3.98,3.98])for(const z of [.43,6.32])for(const y of [DECK+1.65,DECK+3.05]){
         for(const side of [-.6,.6])for(const height of [.1,2.1]){
-          expect(sight([x,y,z],[start[0]+side,height,start[2]+.4])).toBeLessThan(.99);
+          expect(sight([x,y,z],[start[0]+side,start[1]+height,start[2]+.4]),JSON.stringify({entrance:entryKind(i,wave),start,x,y,z,side,height})).toBeLessThan(.99);
         }
       }
     }
@@ -24,11 +35,12 @@ describe('Berlin street entrances',()=>{
     for(let wave=1;wave<=2;wave++)for(let i=0;i<30;i++){
       const path=entryPath(i,wave);
       for(let n=1;n<path.length;n++){
-        expect(sight([path[n-1][0],1,path[n-1][2]],[path[n][0],1,path[n][2]])).toBe(1);
+        expect(sight([path[n-1][0],path[n-1][1]+1,path[n-1][2]],[path[n][0],path[n][1]+1,path[n][2]])).toBe(1);
       }
-      expect(sight([0,DECK+1.68,3.4],[path[2][0],1.7,path[2][2]])).toBe(1);
+      expect(path.slice(1,-1).some(([x,y,z])=>sight([0,DECK+1.68,3.4],[x,y+1.7,z])===1)).toBe(true);
       expect(path[2][2]).toBeLessThan(FENCE_Z-6);
     }
+    expect(new Set(Array.from({length:8},(_,i)=>entryKind(i,1))).size).toBe(4);
     expect(fenceBays[0]*3).toBe(-132);
     expect((fenceBays.at(-1)!+1)*3).toBe(132);
   });

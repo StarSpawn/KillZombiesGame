@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ammunition, ARMORY, GUNS, equip, initialWallet, refill, restoreWallet, shotOffset } from '../loadout.ts';
+import { ammunition, ARMORY, GUNS, MOSIN_IMPACT, nextZoom, scopeFov, equip, initialWallet, refill, restoreWallet, shotOffset } from '../loadout.ts';
 import { ROOM_X, ROOM_FLOOR, floorHeight, fires, blocksPlayer, DISTANCE, DOCK, feedBoxes, gunBoxes, reloadPose, spawnPositions, START, wallDistance } from '../street.ts';
 
 import { PARTS, createBodyDamage, breakAt, remainingBoxes } from '../fracture.ts';
@@ -72,6 +72,23 @@ describe('street escape', () => {
       }
     }
   });
+  it('cycles the rifle magnification and scales the perspective projection',()=>{
+    let zoom=2;
+    for(const expected of [4,6,2]){
+      zoom=nextZoom(zoom);
+      expect(zoom).toBe(expected);
+      expect(Math.tan(1.25/2)/Math.tan(scopeFov(zoom)/2)).toBeCloseTo(expected);
+    }
+  });
+  it('removes more torso voxels with the scoped rifle and keeps a body hit survivable',()=>{
+    const brick=PARTS[0].boxes.findIndex(b=>b.z>.19 && b.y>1.5 && b.color<4),b=PARTS[0].boxes[brick];
+    const hit={brick,part:0,t:0,point:[b.x,b.y,b.z] as [number,number,number]};
+    const rifle=createBodyDamage(),pistol=createBodyDamage();
+    const regular=breakAt(pistol,hit,[0,0,-1]);
+    const heavy=breakAt(rifle,hit,[0,0,-1],MOSIN_IMPACT);
+    expect(heavy.removed.length).toBeGreaterThan(regular.removed.length);
+    expect(rifle.destroyed).toBe(false);
+  });
   it('moves the support hand and feed and returns them to the same rest pose',()=>{
     for(const gun of GUNS){
       const rest=reloadPose(gun,0),middle=reloadPose(gun,.5),end=reloadPose(gun,1);
@@ -81,12 +98,12 @@ describe('street escape', () => {
       expect(middle.cant).toBeGreaterThan(.2);
       expect(feedBoxes(gun).length).toBeGreaterThan(0);
     }
-    expect(new Set(GUNS.map(g=>JSON.stringify(gunBoxes(g)))).size).toBe(3);
+    expect(new Set(GUNS.map(g=>JSON.stringify(gunBoxes(g)))).size).toBe(GUNS.length);
   });
   it('uses distinct shot directions and reduces dispersion while aiming',()=>{
     const offsets=GUNS.map(g=>shotOffset(g,5,0,false,0));
-    expect(new Set(offsets.map(o=>JSON.stringify(o))).size).toBe(3);
-    expect(new Set(GUNS.map(g=>ARMORY[g].kick)).size).toBe(3);
+    expect(new Set(offsets.map(o=>JSON.stringify(o))).size).toBe(GUNS.length);
+    expect(new Set(GUNS.map(g=>ARMORY[g].kick)).size).toBe(GUNS.length);
     for(const gun of GUNS){
       const free=shotOffset(gun,5,0,false,0),aimed=shotOffset(gun,5,0,true,0);
       expect(Math.hypot(aimed.x,aimed.y)).toBeLessThan(Math.hypot(free.x,free.y));

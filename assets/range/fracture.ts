@@ -225,7 +225,7 @@ function detach(body: BodyDamage, part: number, detached: DetachedPart[], includ
   if (part >= 2) body.missingLimbs |= 1 << part;
 }
 
-export function breakAt(body: BodyDamage, hit: Hit, direction: Vec3) {
+export function breakAt(body: BodyDamage, hit: Hit, direction: Vec3, impactScale=1) {
   const { part, brick, point } = hit;
   const removed: Box[] = [];
   const detached: DetachedPart[] = [];
@@ -235,7 +235,7 @@ export function breakAt(body: BodyDamage, hit: Hit, direction: Vec3) {
     const dx = box.x - point[0], dy = box.y - point[1], dz = box.z - point[2];
     const along = dx * direction[0] + dy * direction[1] + dz * direction[2];
     const radial = dx * dx + dy * dy + dz * dz - along * along;
-    if (body.alive[part][i] && (i === brick || (along > -0.10 && along < 0.19 && radial < 0.045))) {
+    if (body.alive[part][i] && (i === brick || (along > -0.10*impactScale && along < 0.19*impactScale && radial < 0.045*impactScale*impactScale))) {
       body.alive[part][i] = 0;
       body.remaining--;
       removed.push(box);

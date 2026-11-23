@@ -6,7 +6,7 @@ import { ARMORY, GUNS, restoreWallet, type Gun, type Wallet } from './loadout.ts
 
 type State={type:'state';phase:'intro'|'run'|'supply'|'choose'|'down';weapon:Gun;cash:number;owned:Gun[];
   hp:number;kills:number;loaded:number;spare:number;total:number;wave:number;bestWave:number;spawned:number;choices:number[];
-  aiming:boolean;reload:number;hitMarker:number;hurt:number;notice:string;ready:boolean;shots:number};
+  zoom:number;aiming:boolean;reload:number;hitMarker:number;hurt:number;notice:string;ready:boolean;shots:number};
 const saveKey='voxel-zombie.street.v1';
 const hudAsset:UiAsset={
   guid:'f222ed9a-7915-4ac0-ae51-d02ef58ea63d',browserExtensions:['css'],
@@ -23,19 +23,20 @@ const hudAsset:UiAsset={
       <div class="cross"></div><div class="hit" hidden>×</div><div class="notice"></div>
       <div class="vitals"><div class="kicker">铁网耐久</div><b class="hp"></b><div class="bar"><i></i></div></div>
       <div class="guns" aria-label="切换武器">
-        <button data-ui-action="g18"><span>1</span> G18 <em></em></button>
+        <button data-ui-action="g18"><span>1</span> PM <em></em></button>
         <button data-ui-action="ak"><span>2</span> AK <em></em></button>
         <button data-ui-action="shotgun"><span>3</span> 霰弹枪 <em></em></button>
+        <button data-ui-action="mosin"><span>4</span> 莫辛纳甘 <em></em></button>
       </div>
-      <div class="ammo"><div class="kicker" data-gun></div><b data-loaded></b><small data-spare></small></div>
-      <div class="help">WASD 移动　空格 跳跃　左键 射击　右键 瞄准　R 换弹　1–3 切枪　Esc 释放鼠标</div>
+      <div class="scope" hidden><i></i><b data-mag></b></div><div class="ammo"><div class="kicker" data-gun></div><b data-loaded></b><small data-spare></small></div>
+      <div class="help">WASD 移动　空格 跳跃　左键 射击　右键 瞄准　R 换弹　1–4 切枪　Esc 释放鼠标</div>
     </div>
     <section class="market" hidden role="dialog" aria-modal="true" aria-label="哨塔军需商店">
       <div class="ledger"><div class="market-head"><div><div class="kicker">OUTPOST / SUPPLY</div>
         <h2>哨塔军需处</h2></div><button data-ui-action="shop-close" aria-label="选择下一波">选择下一波 →</button></div>
         <div class="balance">可用现金 <strong data-balance></strong></div>
         <div class="stock">${GUNS.map((g,i)=>`<div class="stock-row"><div><strong>${ARMORY[g].name}</strong>
-          <small>${['手枪 · 紧凑','步枪 · 连发','霰弹枪 · 扇形散射'][i]}　/　${ARMORY[g].size} 发</small></div>
+          <small>${['手枪 · 紧凑','步枪 · 连发','霰弹枪 · 扇形散射','步枪 · 可调倍镜 / 重创'][i]}　/　${ARMORY[g].size} 发</small></div>
           <button data-ui-action="buy-${g}"></button></div>`).join('')}</div>
         <p>购买后永久解锁。每波开始时修复铁网并补充弹药。</p>
       </div></section>
@@ -67,6 +68,10 @@ const hudAsset:UiAsset={
       background:linear-gradient(#f9f9e7,#f9f9e7) center/2px 100% no-repeat,linear-gradient(#f9f9e7,#f9f9e7) center/100% 2px no-repeat;
       filter:drop-shadow(0 1px 1px #111)}[data-aim=true] .cross{display:block;width:3px;height:3px;border-radius:50%;background:#f3d38e;box-shadow:0 0 2px #342820}
     .hit{font:32px Consolas;color:#ffca78}.notice{top:57%;width:100%;text-align:center;color:#ffdc9c;text-shadow:0 1px 4px #201b12}
+    .scope{position:absolute;left:50%;top:50%;width:75vmin;height:75vmin;border-radius:50%;transform:translate(-50%,-50%);
+      box-shadow:0 0 0 9px #23272a,0 0 0 150vmax #0b1013f5;pointer-events:none;background:linear-gradient(90deg,transparent calc(50% - 1px),#222 50%,transparent calc(50% + 1px)),linear-gradient(transparent calc(50% - 1px),#222 50%,transparent calc(50% + 1px))}
+    .scope b{position:absolute;bottom:10%;width:100%;text-align:center;color:#e7d6a6;font:15px Consolas}
+    .scope{z-index:0}.guns,.vitals,.ammo,header,aside,.help,.notice,.hit{z-index:1}
     .vitals{left:25px;bottom:56px}.hp,.ammo b{font-size:34px;line-height:1.1}.bar{width:90px}.bar i{background:#a2d0ba}
     .ammo{bottom:52px;right:25px;text-align:right}.ammo small{margin-left:5px}.guns{bottom:54px;left:50%;transform:translateX(-50%);display:flex;gap:5px}
     .guns button{font-size:12px;white-space:nowrap;padding:7px 9px}.guns [aria-pressed=true]{border-color:#f3bd74;box-shadow:inset 0 -2px #f3bd74}
@@ -189,11 +194,13 @@ export const hud:Plugin.Object={
           const row=el('[data-choice="'+i+'"]');row.hidden=i>=chosen.length;
           if(!row.hidden){set('[data-choice="'+i+'"] strong','第 '+chosen[i]+' 波');set('[data-choice="'+i+'"] small','普通丧尸 × '+waveCount(chosen[i]));}
         }
+        el('.scope').hidden=!(s.phase==='run' && s.weapon==='mosin' && s.aiming);
+        set('[data-mag]',s.zoom+'×　V 切换倍率');
         if(s.shots>previousShots)shotSound(s.weapon);previousShots=s.shots;
         el('.damage').hidden=s.hurt<=0;el('.hit').hidden=s.hitMarker<=0;
         set('header strong','第 '+s.wave+' 波');set('.distance','普通丧尸　'+s.kills+' / '+s.total+' 已击退');el('.route i').style.width=s.kills/s.total*100+'%';
         set('.hp',String(s.hp));el('.bar i').style.width=s.hp+'%';set('.cash','$'+s.cash);
-        set('[data-gun]',s.reload>0?'换弹中':ARMORY[s.weapon].name);set('[data-loaded]',String(s.loaded));set('[data-spare]','/ '+s.spare);
+        set('[data-gun]',s.reload>0?'换弹中':ARMORY[s.weapon].name+(s.weapon==='mosin'?' · '+s.zoom+'× [V]':''));set('[data-loaded]',String(s.loaded));set('[data-spare]','/ '+s.spare);
         set('.notice',s.notice);set('[data-balance]','$'+s.cash);
         for(const gun of GUNS){
           const button=el('[data-ui-action="'+gun+'"]');button.setAttribute('aria-pressed',String(gun===s.weapon));
