@@ -6,11 +6,11 @@ export const ARMORY = {
   shotgun: { name: '霰弹枪', size: 6, price: 60, interval: 0.72, reload: 1.08, kick: .067, spread: .066, recovery: .21 },
 } as const;
 export const BOUNTY = 15;
-export const initialWallet = () => ({ cash: 0, owned: ['g18'] as Gun[], best: 0 });
+export const initialWallet = () => ({ cash: 0, owned: ['g18'] as Gun[], best: 0, bestWave: 0 });
 export type Wallet = ReturnType<typeof initialWallet>;
 export function restoreWallet(value: Partial<Wallet> | null): Wallet {
   const cleanInt = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
-  return { cash: cleanInt(value?.cash), best: cleanInt(value?.best),
+  return { cash: cleanInt(value?.cash), best: cleanInt(value?.best), bestWave: cleanInt(value?.bestWave),
     owned: GUNS.filter(gun => gun === 'g18' || (Array.isArray(value?.owned) && value.owned.includes(gun))) };
 }
 export function equip(wallet: Wallet, gun: Gun) {

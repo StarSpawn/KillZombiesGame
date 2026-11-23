@@ -13,13 +13,14 @@ import { woundDetails } from './wounds.ts';
 import { BloodPool, BLOOD_COLORS, BLOOD_LIMIT } from './blood.ts';
 import { SHOTGUN_PELLETS } from './weapons.ts';
 import { GUNS, ARMORY, BOUNTY, shotOffset, ammunition, equip, initialWallet, restoreWallet, refill, type Gun } from './loadout.ts';
-import { ROOM_X, ROOM_FLOOR, floorHeight, fires, START, DOCK, DISTANCE, blocksPlayer, wallDistance, scenery, streetColors, spawnPositions, gunBoxes, type ViewPiece, sightHeight, gunColors, supportHand, feedBoxes, reloadPose, doorBoxes, type DoorState } from './street.ts';
-
+import { gunBoxes, type ViewPiece, sightHeight, gunColors, supportHand, feedBoxes, reloadPose } from './gun-model.ts';
+import { waveCount, waveChoices } from './waves.ts';
+import { DECK, FENCE_Z, MAX_LIVE, spawnPoint, outpost, gate, colors } from './outpost.ts';
 import { outfits, bodyColors, firstFleshColor, compactVoxels, dressVoxel } from './outfits.ts';
 
-type Phase = 'intro' | 'run' | 'down' | 'escaped';
+type Phase = 'intro' | 'run' | 'down' | 'supply' | 'choose';
 type Zombie = {
-  position: Vec3; motion: Motion; body: BodyDamage; remainsUntil: number; outfit:number;
+  position: Vec3; motion: Motion; body: BodyDamage; remainsUntil: number; swing:number; outfit:number;
   wounds: number[]; damaged: Map<number, EntityHandle>; dirty: Set<number>;
 };
 
@@ -31,7 +32,7 @@ const up: Vec3 = [0, 1, 0];
 const emptyTransforms = new Float32Array(0);
 const remainsLifetime = 6.5;
 const remainsShrinkTime = 0.45;
-const introSeconds = 7.8;
+
 
 function remainsMesh(): MeshAsset {
   const colors = [0x661623, 0x942333, 0xc93a47, 0xe77766, 0x592929].map(hex => color.linearRgb(hex));
@@ -217,32 +218,21 @@ export const voxelRange: Plugin.Object = {
       };
 
       const tintPalette = (hexes: string[]) => hexes.map(hex => color.linearRgb(parseInt(hex.slice(1), 16)));
-      const streetPalette=tintPalette(streetColors);
-      const sectionLength=82;
-      const sections=new Map<number,Box[]>();
-      const roadBase:Box[]=[];
-      for(const box of scenery){
-        // Keep long road surfaces from extending the bounds of local scenery.
-        if(box.sz>sectionLength*2){roadBase.push(box);continue;}
-        const section=Math.floor(box.z/sectionLength);
-        if(!sections.has(section))sections.set(section,[]);
-        sections.get(section)!.push(box);
-      }
-      if(roadBase.length)mesh(retain(mergeBoxes(roadBase,zero,streetPalette)),bodyMaterial,zero,unit);
-      for(const boxes of sections.values())mesh(retain(mergeBoxes(boxes,zero,streetPalette)),bodyMaterial,zero,unit);
-      const crowdSize=spawnPositions().length;
+      const sceneColors=tintPalette(colors);
+      mesh(retain(viewModel(outpost,sceneColors)),bodyMaterial,zero,unit);
+      const fence=mesh(retain(viewModel(gate,sceneColors)),bodyMaterial,zero,unit);
+      const crowdSize=MAX_LIVE+8;
       const gunMeshes = Object.fromEntries(GUNS.map(g => [g, retain(viewModel(gunBoxes(g), tintPalette(gunColors))) ])) as Record<Gun, AssetHandle<'mesh'>>;
       const viewGun = mesh(gunMeshes.g18, bodyMaterial, [0,-20,0], unit);
       const gunPalette=tintPalette(gunColors);
       const hand=mesh(retain(viewModel(supportHand,gunPalette)),bodyMaterial,[0,-20,0],unit);
       const feeds=Object.fromEntries(GUNS.map(g=>[g,retain(viewModel(feedBoxes(g),gunPalette))])) as Record<Gun,AssetHandle<'mesh'>>;
       const feed=mesh(feeds.g18,bodyMaterial,[0,-20,0],unit);
-      const shutter=mesh(retain(mergeBoxes(doorBoxes,zero,tintPalette(streetColors))),bodyMaterial,zero,unit);
       const legBatches=PARTS.slice(4).map(part=>batch(retain(mergeBoxes(part.intact,zero)),bodyMaterial,crowdSize));
       const bodiesByOutfit=outfits.map((_,outfit)=>[
         ...PARTS.slice(0,4).map((part,index)=>{
           const boxes=compactVoxels(part.boxes.map(box=>dressVoxel(outfit,index,box)));
-          return batch(retain(mergeBoxes(boxes,zero)),bodyMaterial,Math.ceil(crowdSize/outfits.length));
+          return batch(retain(mergeBoxes(boxes,zero)),bodyMaterial,crowdSize);
         }),...legBatches
       ]);
       const bodyBatches=[...new Set(bodiesByOutfit.flat())];
@@ -257,8 +247,6 @@ export const voxelRange: Plugin.Object = {
 
       const mist=color.linearRgb(0x70808b);
       const fog=world.spawn({component:Fog,data:{mode:FogModeValue.linear,color:mist,near:10,far:112,maxOpacity:.98}}).unwrap();
-      const flames=['#ec682b','#ffca63'].map(c=>batch(boxMesh,retain(Materials.unlit(c)),fires.length*8));
-      const smoke=batch(boxMesh,retain(Materials.standard({baseColor:'#68696a',roughness:1})),fires.length*8);
       const rainCount=620;
       const rainfall=batch(boxMesh,retain(Materials.unlit('#899aa2')),rainCount,false);
       const rainRotation=quat.fromEuler(quat.create(),0,0,.13,'XYZ');
@@ -293,40 +281,31 @@ export const voxelRange: Plugin.Object = {
       const particleScale: Vec3 = [1, 1, 1];
       const zombies: Zombie[] = [];
       let phase: Phase = 'intro';
-      let intro = 0, hp = 100, kills = 0, shots = 0, hurt = 0, attackWait = 0;
+      let wave=1, spawnedCount=0, spawnIn=0;
+      let hp = 100, kills = 0, shots = 0, hurt = 0;
       let weapon: Gun = 'g18', wallet = initialWallet(), ammo = ammunition(), restored = false;
       let cooldown = 0, reload = 0, aiming = false, recoil = 0, aimBlend = 0;
-      let door:DoorState='closed', shop=false, kick=0, sway=0;
+      let kick=0,sway=0;
       let lastImpact: {part:number;collapsed:boolean}|null=null;
       let lastSpread={x:0,y:0};
-      const inRoom=()=>door!=='locked' && z>.25;
-      function setDoor(next:DoorState){
-        door=next;
-        world.set(shutter,Transform,{pos:[0,door==='open'?3.9:0,0]}).unwrap();
-      }
-      function setShop(open:boolean){
-        if(open && (phase!=='run'||!inRoom()||!restored))return;
-        shop=open;aiming=false;
-        gameHost.setPointerLockAllowed?.(!open);
-        state();
-      }
-      let notice = '', noticeFor = 0, farthest = 0, hitMarker = 0;
-      let x = ROOM_X, z = START, feet = ROOM_FLOOR, jumpSpeed = 0, yaw = 0, pitch = 0, stride = 0;
-      let eye: Vec3 = [0,2,START], forward: Vec3 = [0,0,-1], right: Vec3 = [1,0,0], vertical: Vec3 = [0,1,0];
+      let notice='',noticeFor=0,hitMarker=0;
+      let x=0,z=3.4,feet=DECK,jumpSpeed=0,yaw=0,pitch=-.18,stride=0;
+      let eye: Vec3 = [0,DECK+1.68,3.4], forward: Vec3 = [0,0,-1], right: Vec3 = [1,0,0], vertical: Vec3 = [0,1,0];
       let width = 0, height = 0, lastFov = -1, lastState = 0;
       function snapshot() {
-        return { phase, hp, kills, shots, weapon, cash: wallet.cash, owned: [...wallet.owned], best: wallet.best,
-          distance: Math.max(0,Math.floor(START-z)), farthest, total: DISTANCE, loaded: ammo[weapon].loaded, spare: ammo[weapon].spare,
-          aiming, reload, door, shop, inRoom:inRoom(), canOpen:door==='closed' && Math.abs(x-ROOM_X)<2.2 && z<3.4, hitMarker, hurt, notice, intro, ready: restored };
+        return {phase,hp,kills,shots,weapon,cash:wallet.cash,owned:wallet.owned,bestWave:wallet.bestWave,
+          wave,total:waveCount(wave),spawned:spawnedCount,choices:waveChoices(wallet.bestWave,wave),
+          loaded:ammo[weapon].loaded,spare:ammo[weapon].spare,aiming,reload,hitMarker,hurt,notice,ready:restored};
       }
       function state() { port?.postMessage({ type: 'state', ...snapshot() }); }
       function save() { if (restored) port?.postMessage({ type: 'save', wallet }); }
       function tell(text: string, duration = 1.7) { notice = text; noticeFor = duration; }
-      function end(next: 'down'|'escaped') {
+      function finishWave(cleared:boolean){
+        phase=cleared?'supply':'down';aiming=false;reload=0;
         gameHost.setPointerLockAllowed?.(false);
-        phase = next; shop=false; aiming = false; reload = 0;
-        wallet.best = Math.max(wallet.best, farthest);
-        save(); state();
+        if(cleared)wallet.bestWave=Math.max(wallet.bestWave,wave);
+        else world.set(fence,Transform,{pos:[0,-2.7,0]}).unwrap();
+        save();state();
       }
 
       function renderLarge(fragment: Readonly<Fragment>) {
@@ -350,19 +329,10 @@ export const voxelRange: Plugin.Object = {
 
       function placeCamera() {
         const viewport = gameHost.drawingBufferSize?.();
-        let fov = 1.25 - aimBlend*.32;
-        if (phase === 'intro') {
-          const t=Math.min(1,intro/(introSeconds*.86)), ease=t*t*(3-2*t);
-          if(t<1){
-            eye=[Math.sin(Math.PI*t)*3.1,4.9+2*(1-ease)+9*Math.sin(Math.PI*t)**2,DOCK+(-9-DOCK)*ease];
-            forward=normalized([-.055*Math.sin(Math.PI*t),-.13-.30*Math.sin(Math.PI*t),-1]);
-          }else{eye=[ROOM_X,ROOM_FLOOR+1.68,START];forward=[0,0,-1];}
-          fov = 1.25;
-        } else {
-          eye = [x,1.68+feet+Math.sin(stride)*.026,z];
-          const viewPitch=Math.max(-1.42,Math.min(1.42,pitch+kick));
-          forward = [Math.sin(yaw+sway)*Math.cos(viewPitch),Math.sin(viewPitch),-Math.cos(yaw+sway)*Math.cos(viewPitch)];
-        }
+        const fov = 1.25 - aimBlend*.32;
+        eye = [x,1.68+feet+Math.sin(stride)*.026,z];
+        const viewPitch=Math.max(-1.42,Math.min(1.42,pitch+kick));
+        forward = [Math.sin(yaw+sway)*Math.cos(viewPitch),Math.sin(viewPitch),-Math.cos(yaw+sway)*Math.cos(viewPitch)];
         right=normalized(cross(forward,up)); vertical=cross(right,forward);
         const target = eye.map((n,i)=>n+forward[i]) as Vec3;
         const q=quat.fromLookAt(rotation,eye,target,up);
@@ -391,22 +361,27 @@ export const voxelRange: Plugin.Object = {
         attach(feed,pose.feed,weapon!=='shotgun'||progress>.12 && progress<.88);
       }
 
-      function configure(first = false) {
-        for (const entity of dynamicEntities) world.despawn(entity).unwrap();
-        dynamicEntities.clear(); largeMeshes.clear(); zombies.length=0; tracers.length=0; blood.clear(); fragments.reset();
-        x=ROOM_X;z=START;feet=ROOM_FLOOR;jumpSpeed=0;yaw=0;pitch=0;stride=0;
-        hp=100;kills=shots=farthest=0; hurt=attackWait=hitMarker=cooldown=reload=aimBlend=recoil=0;
-        shop=false;setDoor('closed');gameHost.setPointerLockAllowed?.(!first);kick=sway=0;lastImpact=null;
-        aiming=false;notice='';noticeFor=0;ammo=ammunition();
-        phase=first?'intro':'run'; intro=first?0:introSeconds;
-        for(const position of spawnPositions()){
-          const zombie: Zombie = {position, motion:createMotion(), body:createBodyDamage(), outfit:(zombies.length*8)%outfits.length, remainsUntil:0,
-            damaged:new Map(),dirty:new Set(),wounds:[0,0,0,0,0,0]};
-          const angle = zombies.length < 3 ? 0 : Math.sin(zombies.length * 1.77) * 1.9;
-          walk(zombie.motion,zombie.body,position,[position[0]+3*Math.sin(angle),0,position[2]+3*Math.cos(angle)],zombies.length*.81,0);
-          zombies.push(zombie);
-        }
-        placeCamera(); state();
+      function beginWave(level:number){
+        if(!restored || phase==='run' || !Number.isSafeInteger(level) || level<1 || level>wallet.bestWave+1)return;
+        for(const entity of dynamicEntities)world.despawn(entity).unwrap();
+        dynamicEntities.clear();largeMeshes.clear();zombies.length=0;tracers.length=0;blood.clear();fragments.reset();
+        wave=level;spawnedCount=0;spawnIn=0;hp=100;kills=shots=0;
+        x=0;z=3.4;feet=DECK;jumpSpeed=0;yaw=0;pitch=-.18;stride=0;
+        hurt=hitMarker=cooldown=reload=aimBlend=recoil=kick=sway=0;aiming=false;lastImpact=null;
+        ammo=ammunition();
+        for(const g of GUNS)ammo[g].spare=Math.max(ammo[g].spare,waveCount(level)*(g==='shotgun'?3:8));
+        notice='';noticeFor=0;phase='run';
+        world.set(fence,Transform,{pos:zero}).unwrap();
+        gameHost.setPointerLockAllowed?.(true);placeCamera();state();
+      }
+      function reinforce(dt:number){
+        spawnIn-=dt;
+        if(spawnIn>0 || spawnedCount>=waveCount(wave) || zombies.filter(v=>!v.body.destroyed).length>=MAX_LIVE)return;
+        const position=spawnPoint(spawnedCount,wave);
+        const zombie:Zombie={position,motion:createMotion(),body:createBodyDamage(),swing:0,
+          outfit:(spawnedCount*8+wave-1)%outfits.length,remainsUntil:0,damaged:new Map(),dirty:new Set(),wounds:[0,0,0,0,0,0]};
+        walk(zombie.motion,zombie.body,position,[position[0],0,FENCE_Z],0,0);
+        zombies.push(zombie);spawnedCount++;spawnIn=Math.max(.95,2.1-wave*.09);
       }
 
       function updateDamagedMesh(zombie: Zombie, part: number) {
@@ -504,7 +479,7 @@ export const voxelRange: Plugin.Object = {
           const offset=shotOffset(weapon,shots,p,aiming,kick);
           if(!p)lastSpread=offset;
           const direction=normalized(forward.map((n,i)=>n+right[i]*offset.x+vertical[i]*offset.y) as Vec3);
-          const wall=wallDistance(eye,direction,door);
+          const wall=direction[1]<0 ? Math.min(120,-eye[1]/direction[1]) : 120;
           const impact=nearest(eye,direction,wall);
           const length=impact?.hit.t ?? Math.min(100,wall);
           const end=eye.map((n,i)=>n+direction[i]*length) as Vec3;
@@ -522,9 +497,9 @@ export const voxelRange: Plugin.Object = {
         reload=ARMORY[weapon].reload;
       }
       function selectGun(gun:Gun) {
-        if(phase!=='run'||!restored)return;
+        if((phase!=='run' && phase!=='supply')||!restored)return;
         const buying=!wallet.owned.includes(gun);
-        if(buying && !shop){tell(inRoom()?'按 B 打开军需商店':'请在下次出发前购买');state();return;}
+        if(buying && phase!=='supply')return;
         if(!equip(wallet,gun)){tell('还差 $'+(ARMORY[gun].price-wallet.cash));state();return;}
         if(gun!==weapon){weapon=gun;reload=kick=sway=0;cooldown=.18;world.set(feed,MeshFilter,{assetHandle:feeds[gun]}).unwrap();world.set(viewGun,MeshFilter,{assetHandle:gunMeshes[gun]}).unwrap();}
         if(buying){tell('已购入 '+ARMORY[gun].name);save();}
@@ -542,24 +517,23 @@ export const voxelRange: Plugin.Object = {
         for (const layer of bloodBatches) layer.publish();
       }
 
-      function finishIntro(){
-        intro=introSeconds;phase='run';gameHost.setPointerLockAllowed?.(true);
-        placeCamera();state();
-      }
       function message(event:MessageEvent) {
         const data=event.data;
         if(data?.type==='restore' && !restored){wallet=restoreWallet(data.wallet);restored=true;state();}
         if(data?.type==='status')state();
-        if(data?.type==='retry' && (phase==='down'||phase==='escaped'))configure();
-        if(data?.type==='skip' && phase==='intro')finishIntro();
-        if(data?.type==='shop')setShop(!!data.open);
-        if(data?.type==='door' && phase==='run' && !shop && door==='closed' && Math.abs(x-ROOM_X)<2.2 && z<3.4){setDoor('open');state();}
+        if(data?.type==='retry' && phase==='down')beginWave(wave);
+        if(data?.type==='skip' && phase==='intro' && restored){
+          if(wallet.bestWave){phase='choose';state();}else beginWave(1);
+        }
+        if(data?.type==='choose' && phase==='supply'){phase='choose';state();}
+        if(data?.type==='supply' && phase==='choose'){phase='supply';state();}
+        if(data?.type==='wave' && phase==='choose')beginWave(data.level);
         if(data?.type==='gun' && GUNS.includes(data.gun))selectGun(data.gun);
       }
-      configure(true);
+      placeCamera();state();
       port?.addEventListener('message',message);port?.start();
       const removeRead=gameHost.gameProjection?.registerRead({
-        id:'voxel-zombie.street',title:'Street escape',
+        id:'voxel-zombie.street',title:'Outpost defense',
         read:()=>({...snapshot(),x,z,feet,yaw,pitch,kick,lastSpread,lastImpact,eye:[...eye],fov:lastFov,
           viewRig:[viewGun,hand,feed].map(entity=>Array.from(world.get(entity,Transform).unwrap().pos)),
           bodies:zombies.map(v=>({x:v.position[0],z:v.position[2],dead:v.body.destroyed,outfit:outfits[v.outfit][0],hits:[...v.body.hits],chestWounds:v.wounds[0],mode:movementMode(v.body)})),
@@ -572,18 +546,12 @@ export const voxelRange: Plugin.Object = {
           const dt=Math.min(.08,Math.max(0,time.delta));
           const input=world.getResource<InputSnapshot>(INPUT_SNAPSHOT_RESOURCE_KEY), keys=input?.keyboard, mouse=input?.mouse;
           const press=(code:string)=>!!keys?.justPressedCode(code);
-          if(phase==='intro'){
-            intro=Math.min(introSeconds,intro+dt);
-            if(press('Space')||intro>=introSeconds)finishIntro();
-          } else if(phase==='down'||phase==='escaped'){
-            if(press('Enter'))configure();
-          } else if(restored) {
-            if(press('KeyB'))setShop(!shop);
-            if(shop){
-              if(press('Escape'))setShop(false);
-              return;
-            }
-            if(press('KeyE') && door==='closed' && Math.abs(x-ROOM_X)<2.2 && z<3.4){setDoor('open');state();}
+          if(phase==='down' && press('Enter'))beginWave(wave);
+          if(phase==='intro' && press('Space') && restored){
+            if(wallet.bestWave){phase='choose';state();}else beginWave(1);
+          }
+          if(phase==='run' && restored){
+            reinforce(dt);
             for(const [i,g] of GUNS.entries())if(press('Digit'+(i+1)))selectGun(g);
             aiming=!!mouse?.pointerLocked && mouse.button(2);
             aimBlend+=(Number(aiming)-aimBlend)*Math.min(1,dt*16);
@@ -596,19 +564,12 @@ export const voxelRange: Plugin.Object = {
             const ahead=Number(!!keys?.downCode('KeyW'))-Number(!!keys?.downCode('KeyS'));
             const moving=horiz!==0||ahead!==0;
             const speed=(aiming?2.65:5.65)*dt/Math.max(1,Math.hypot(horiz,ahead));
-            const ground=floorHeight(x,z);
+            const ground=DECK;
             if(press('Space')&&feet<=ground+.001)jumpSpeed=6.8;
             jumpSpeed-=18*dt;feet=Math.max(ground,feet+jumpSpeed*dt);if(feet===ground)jumpSpeed=0;
-            const canStand=(nx:number,nz:number)=>!blocksPlayer(nx,nz,feet,door)&&!zombies.some(v=>!v.body.destroyed &&
-              Math.hypot(nx-v.position[0],nz-v.position[2])<.70 && (feet<.8||v.motion.mode==='chase'||v.motion.mode==='hop'));
-            const nx=x+(Math.cos(yaw)*horiz+Math.sin(yaw)*ahead)*speed;
-            if(nx!==x && canStand(nx,z))x=nx;
-            const nz=z+(Math.sin(yaw)*horiz-Math.cos(yaw)*ahead)*speed;
-            if(nz!==z && canStand(x,nz))z=nz;
-            if(door==='open' && z<-.55){setDoor('locked');tell('已跃出安全屋');state();}
+            x=Math.max(-3.98,Math.min(3.98,x+(Math.cos(yaw)*horiz+Math.sin(yaw)*ahead)*speed));
+            z=Math.max(.43,Math.min(6.32,z+(Math.sin(yaw)*horiz-Math.cos(yaw)*ahead)*speed));
             if(moving)stride+=dt*9;
-            farthest=Math.max(farthest,Math.min(DISTANCE,Math.floor(START-z)));
-            if(z<=DOCK)end('escaped');
             if(press('KeyR'))beginReload();
             if(reload>0){reload=Math.max(0,reload-dt);if(!reload)refill(ammo[weapon],ARMORY[weapon].size);}
             const recovery=ARMORY[weapon].recovery*dt;
@@ -617,29 +578,12 @@ export const voxelRange: Plugin.Object = {
             cooldown=Math.max(0,cooldown-dt);recoil=Math.max(0,recoil-dt*9);
           }
           placeCamera();
-          flames.forEach(layer=>layer.clear());
-          smoke.clear();
-          for(const [index,origin] of fires.entries()){
-            if(Math.abs(origin[2]-eye[2])>120)continue;
-            for(let i=0;i<8;i++){
-              const t=elapsed*5+i*2.4+index;
-              const h=2.1+1.05*Math.sin(t)+.42*Math.cos(t*1.8);
-              const px=origin[0]+Math.sin(i*4)*.7, pz=origin[2]+Math.cos(i*2.4)*1.8;
-              quat.fromEuler(rotation,0,t*.07,.13*Math.sin(t),'XYZ');
-              mat4.compose(transform,[px,origin[1]+h*.5,pz],rotation,[.7,h,.66]);
-              flames[i%2].push(transform);
-              const age=(elapsed*.22+i/8)%1, size=(.48+age*1.6)*Math.min(1,(1-age)*6);
-              mat4.compose(transform,[px+age*3,origin[1]+1.1+age*9,pz+age*1.6],rotation,[size,size*1.3,size]);
-              smoke.push(transform);
-            }
-          }
-          flames.forEach(layer=>layer.publish()); smoke.publish();
           rainfall.clear();
           for(const drop of drops){
             const px=eye[0]-16+wrap(drop.x+elapsed*drop.speed*.13-eye[0]+16,32);
             const pz=eye[2]-16+wrap(drop.z-eye[2]+16,32);
             const py=wrap(drop.y-elapsed*drop.speed,12);
-            if(Math.abs(px-ROOM_X)<5.45 && pz>-.6 && pz<10.6 && py<ROOM_FLOOR+4.45)continue;
+            if(Math.abs(px)<4.8 && pz>-.3 && pz<7.1 && py<7)continue;
             const depth=(px-eye[0])*forward[0]+(py-eye[1])*forward[1]+(pz-eye[2])*forward[2];
             if(depth < -rainRadius)continue;
             drop.matrix[12]=px;
@@ -648,9 +592,9 @@ export const voxelRange: Plugin.Object = {
             rainfall.push(drop.matrix);
           }
           rainfall.publish();
-          if(phase==='run' && !shop && restored && mouse?.pointerLocked && (mouse.justPressed(0)||mouse.button(0))) shoot();
+          if(phase==='run' && restored && mouse?.pointerLocked && (mouse.justPressed(0)||mouse.button(0))) shoot();
           noticeFor-=dt;if(noticeFor<=0)notice='';
-          hitMarker=Math.max(0,hitMarker-dt);hurt=Math.max(0,hurt-dt);attackWait=Math.max(0,attackWait-dt);
+          hitMarker=Math.max(0,hitMarker-dt);hurt=Math.max(0,hurt-dt);
           renderBlood(dt);
           footBatch.clear();
           bodyBatches.forEach(layer => layer.clear());
@@ -671,17 +615,18 @@ export const voxelRange: Plugin.Object = {
               continue;
             }
             if(Math.abs(zombie.position[2]-eye[2])>185)continue;
-            const pos=zombie.position, dist=Math.hypot(pos[0]-x,pos[2]-z);
-            const pursuing=phase==='run' && z<-.6 && dist<19;
-            if(pursuing){
-              const px=pos[0],pz=pos[2];
-              walk(zombie.motion,zombie.body,pos,[x,0,Math.min(-1,z)],i*.81,dt*1.72);
-              if(blocksPlayer(pos[0],pos[2],0)){pos[0]=px;pos[2]=pz;walk(zombie.motion,zombie.body,pos,pos,i*.81,0);}
-              if(dist<1.60 && attackWait<=0 && feet<(zombie.motion.mode==='chase'?2:.7)){
-                hp=Math.max(0,hp-22);hurt=.36;attackWait=.49;
-                if(!hp)end('down');
+            const pos=zombie.position;
+            if(phase==='run'){
+              const windup=pos[2]>=FENCE_Z-.65 ? Math.max(0,1-zombie.swing/.5) : 0;
+              walk(zombie.motion,zombie.body,pos,[pos[0],0,FENCE_Z+.6],i*.81,dt*1.8,windup);
+              if(pos[2]>=FENCE_Z-.65){
+                zombie.swing-=dt;
+                if(zombie.swing<=0){
+                  hp=Math.max(0,hp-3);zombie.swing=1.25;hurt=.2;
+                  if(!hp)finishWave(false);
+                }
               }
-            }else walk(zombie.motion,zombie.body,pos,pos,i*.81,dt*.55);
+            }
             for (const [part, layer] of bodiesByOutfit[zombie.outfit].entries()) {
               const pose = zombie.motion.parts[part];
               const damaged = zombie.damaged.get(part);
@@ -694,6 +639,11 @@ export const voxelRange: Plugin.Object = {
             const crawling = zombie.motion.mode !== 'chase' && zombie.motion.mode !== 'hop';
             mat4.compose(transform, [footX, 0.009, footZ + (crawling ? 0.55 : 0)], rotation, [0.94, 0.01, crawling ? 1.24 : 0.57]);
             footBatch.push(transform);
+          }
+          if(phase==='run')world.set(fence,Transform,{pos:[0,0,.12*Math.sin(hurt*48)*hurt/.2]}).unwrap();
+          if(phase==='run' && kills===waveCount(wave))finishWave(true);
+          for(let i=zombies.length-1;i>=0;i--){
+            if(zombies[i].body.destroyed && zombies[i].remainsUntil<=elapsed)zombies.splice(i,1);
           }
           footBatch.publish();
           bodyBatches.forEach(layer => layer.publish());

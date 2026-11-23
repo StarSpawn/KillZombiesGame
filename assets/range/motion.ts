@@ -54,7 +54,7 @@ export function fragmentPose(pose: PartPose): FragmentPose {
   return { matrix: m, scale:BODY_SCALE, euler: [pitch, Math.asin(sine), Math.abs(sine) < 0.999999 ? Math.atan2(-m[4], m[0]) : 0] };
 }
 
-export function walk(motion: Motion, body: BodyDamage, position: Vec3, target: Vec3, phaseOffset: number, dt: number) {
+export function walk(motion: Motion, body: BodyDamage, position: Vec3, target: Vec3, phaseOffset: number, dt: number, windup = 0) {
   const mode = movementMode(body);
   if (mode === 'dead') return;
   motion.age += dt;
@@ -101,7 +101,7 @@ export function walk(motion: Motion, body: BodyDamage, position: Vec3, target: V
     let pitch = 0;
     if (part === 1) pitch = -0.90 * prone + (wriggling ? 0.16 * ripple : 0.04 * cycle);
     else if (part >= 4) pitch = mode === 'hop' ? 0.16 - 0.40 * hop : side * 0.33 * cycle;
-    else if (part >= 2) pitch = -1.37 - 1.03 * prone + side * cycle * (0.10 + 0.32 * prone);
+    else if (part >= 2) pitch = -1.37 - 1.03 * prone + side * cycle * (0.10 + 0.32 * prone) - windup * (side < 0 ? .92 : .55);
     quat.fromEuler(motion.local, pitch, 0, 0, 'XYZ');
     quat.multiply(pose.rotation, motion.bodyRotation, motion.local);
     mat4.compose(pose.matrix, motion.origin, pose.rotation, bodyScale);
