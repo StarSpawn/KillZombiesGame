@@ -242,7 +242,7 @@ export function breakAt(body: BodyDamage, hit: Hit, direction: Vec3, impactScale
     }
   }
   if (part === 0) {
-    if (!body.waistSevered && point[1] <= waistHitHeight) body.waistHits++;
+    if (!body.waistSevered) body.waistHits += impactScale>=4 ? 2 : Number(point[1]<=waistHitHeight);
     const attached = torsoConnectedToHead(body.alive[0]);
     const cutThrough = !hipContacts.some(index => attached[index]);
     const waistBreak = !body.waistSevered && body.waistHits >= waistHitsToBreak;

@@ -4,7 +4,7 @@ import { mountUi, type UiAsset } from '@forgeax/engine/ui';
 import { waveCount } from './waves.ts';
 import { chart, operationsCss } from './operations-ui.ts';
 import { technologies, techById, branchNames, DROP_PRICE } from './technology.ts';
-import { ARMORY, GUNS, restoreWallet, type Gun, type Wallet } from './loadout.ts';
+import { ARMORY, GUNS, weaponSlot, restoreWallet, type Gun, type Wallet } from './loadout.ts';
 
 type State={type:'state';phase:'intro'|'run'|'supply'|'choose'|'down';weapon:Gun;cash:number;owned:Gun[];
   hp:number;kills:number;loaded:number;spare:number;total:number;wave:number;bestWave:number;spawned:number;choices:number[];
@@ -17,7 +17,7 @@ const hudAsset:UiAsset={
     <div class="shade"></div><div class="damage" hidden></div>
     <div class="intro layer"><div class="cinema"><span class="rule"></span><div class="kicker">GRENZPOSTEN 04　/　1962</div>
       <h1>边境哨塔</h1><p>柏林边境，夜班。守住铁网，击退从街区涌来的尸群。</p><p data-first></p>
-      <button data-ui-action="skip">开始守卫　<span>SPACE</span></button></div></div>
+      <button disabled data-ui-action="skip">开始守卫　<span>SPACE</span></button></div></div>
     <div class="game layer">
       <button class="capture" data-ui-action="capture"><span>点击画面控制视角</span></button>
       <header><div class="kicker">GRENZPOSTEN 04</div><strong>第 1 波</strong>
@@ -26,15 +26,16 @@ const hudAsset:UiAsset={
       <div class="cross"></div><div class="hit" hidden>×</div><div class="notice"></div>
       <div class="vitals"><div class="kicker">铁网耐久</div><b class="hp"></b><div class="bar"><i></i></div></div>
       <div class="guns" aria-label="切换武器">
-        ${GUNS.map((g,i)=>'<button data-ui-action="'+g+'"><span>'+(i+1)+'</span> '+ARMORY[g].name+'</button>').join('')}
+        ${GUNS.map(g=>'<button data-ui-action="'+g+'"><span>'+(weaponSlot(g)==='primary'?'1 主':'2 副')+'</span> '+ARMORY[g].name+'</button>').join('')}
       </div>
       <div class="field-status"></div><div class="interact"></div><div class="scope" hidden><i></i><b data-mag></b></div><div class="ammo"><div class="kicker" data-gun></div><b data-loaded></b><small data-spare></small></div>
-      <div class="help">WASD 移动　空格 跳跃　左键 射击　右键 瞄准　R 换弹　1–6 切枪　Esc 释放鼠标</div>
+      <div class="help">WASD 移动　空格 跳跃　左键 射击　右键 瞄准　R 换弹　1 主武器　2 副武器　滚轮切枪　Esc 释放鼠标</div>
     </div>
     <section class="market" hidden role="dialog" aria-modal="true" aria-label="哨塔军需商店">
       <div class="ledger tree-ledger"><div class="market-head"><div><div class="kicker">GRENZPOSTEN 04　/　军需档案</div>
         <h2>阵地科技树</h2></div><button data-ui-action="shop-close">选择下一波 →</button></div>
         <div class="balance">可用赏金 <strong data-balance></strong></div>
+        <div class="loadout">${(['primary','secondary'] as const).map(slot=>'<label>'+(slot==='primary'?'主武器':'副武器')+' <select data-slot="'+slot+'">'+(slot==='primary'?'<option value="" disabled>尚未解锁</option>':'')+GUNS.filter(g=>weaponSlot(g)===slot).map(g=>'<option value="'+g+'">'+ARMORY[g].name+'</option>').join('')+'</select></label>').join('')}</div>
         <div class="tech-layout">${chart}<div class="dossier"><div class="kicker" data-branch></div><h3 data-title></h3>
           <p data-effect></p><p class="req" data-req></p>${technologies.map(n=>'<button hidden data-ui-action="buy-'+n.id+'"></button>').join('')}</div></div>
       </div></section>
@@ -118,8 +119,10 @@ export const hud:Plugin.Object={
           const b=el('[data-ui-action="buy-'+v.id+'"]') as HTMLButtonElement;
           b.hidden=v.id!==selected;if(b.hidden)continue;
           const gun=GUNS.includes(v.id as Gun);
-          b.disabled=owned?(!gun||s.weapon===v.id):(!ready||s.cash<v.cost);
-          b.textContent=owned?(gun?(s.weapon===v.id?'已装备':'装备'):'已部署'):!ready?'尚缺前置 · $'+v.cost:s.cash<v.cost?'$'+v.cost+' · 差 $'+(v.cost-s.cash):'解锁　$'+v.cost;
+          const equipped=s.carried.includes(v.id as Gun);
+          const slot=gun && weaponSlot(v.id as Gun)==='primary'?'主武器':'副武器';
+          b.disabled=owned?(!gun||equipped):(!ready||s.cash<v.cost);
+          b.textContent=owned?(gun?(equipped?'已配备 · '+slot:'配备为'+slot):'已部署'):!ready?'尚缺前置 · $'+v.cost:s.cash<v.cost?'$'+v.cost+' · 差 $'+(v.cost-s.cash):'解锁　$'+v.cost;
         }
         shadow.querySelectorAll<HTMLElement>('[data-link-to]').forEach(line=>line.dataset.active=s.tech.includes(line.dataset.linkTo!)?'yes':'no');
       }
@@ -204,11 +207,13 @@ export const hud:Plugin.Object={
           return;
         }
         if(data?.type!=='state')return;
-        const s=data as State;latest=s;if(!s.ready)restore();
+        const s=data as State;latest=s;
+        (el('[data-ui-action="skip"]') as HTMLButtonElement).disabled=!s.ready;
+        if(!s.ready)restore();
         const h=el('.hud');h.dataset.phase=s.phase;h.dataset.aim=String(s.aiming);
         el('.market').hidden=s.phase!=='supply';el('.waves').hidden=s.phase!=='choose';
         if(s.phase!=='run')release();
-        set('[data-first]',s.bestWave?'最高已守住第 '+s.bestWave+' 波':'第 1 波　·　普通丧尸 × '+waveCount(1));
+        set('[data-first]',!s.ready?'正在准备射击效果…':s.bestWave?'最高已守住第 '+s.bestWave+' 波':'第 1 波　·　普通丧尸 × '+waveCount(1));
         set('.market h2',s.kills===s.total?'第 '+s.wave+' 波守住 · 阵地科技树':'阵地科技树');
         chosen=s.choices;
         const other=el('[data-other] input') as HTMLInputElement;
@@ -239,8 +244,16 @@ export const hud:Plugin.Object={
         previousBlasts=s.blastCount;wasDocked=s.truckDocked;
         set('.field-status',fieldLines.join('\n'));
         if(s.phase==='supply'){
-          const signature=[s.tech.join(','),s.weapon,s.cash,selected].join('|');
-          if(signature!==treeSignature){inspect(s);treeSignature=signature;}
+          const signature=[s.tech.join(','),s.carried.join(','),s.cash,selected].join('|');
+          if(signature!==treeSignature){
+            inspect(s);treeSignature=signature;
+            for(const select of shadow.querySelectorAll<HTMLSelectElement>('select[data-slot]')){
+              const equipped=s.carried.find(g=>weaponSlot(g)===select.dataset.slot);
+              select.disabled=!equipped;
+              for(const option of select.options)option.hidden=option.value!==''?!s.owned.includes(option.value as Gun):!!equipped;
+              select.value=equipped??'';
+            }
+          }
         }
         set('.notice',s.notice);set('[data-balance]','$'+s.cash);
         for(const gun of GUNS){
@@ -252,6 +265,12 @@ export const hud:Plugin.Object={
           set('[data-summary]','第 '+s.wave+' 波　·　击退 '+s.kills+' / '+s.total+'　·　保留赏金 $'+s.cash);
         }
       }
+      const changeSlot=(event:Event)=>{
+        const target=event.target;
+        if(target instanceof HTMLSelectElement && target.dataset.slot && GUNS.includes(target.value as Gun) && latest?.owned.includes(target.value as Gun))
+          port?.postMessage({type:'gun',gun:target.value});
+      };
+      shadow.addEventListener('change',changeSlot);
       const marketKey=(e:KeyboardEvent)=>{
         if(e.code==='Escape' && document.pointerLockElement && document.pointerLockElement===gameCanvas()){
           release();return;
@@ -264,7 +283,7 @@ export const hud:Plugin.Object={
       window.addEventListener('contextmenu',menu);
       window.addEventListener('pointerdown',unlockAudio,{once:true});
       port?.addEventListener('message',update);port?.start();restore();port?.postMessage({type:'status'});
-      return ()=>{window.removeEventListener('keydown',marketKey,true);window.removeEventListener('contextmenu',menu);window.removeEventListener('pointerdown',unlockAudio);
+      return ()=>{shadow.removeEventListener('change',changeSlot);window.removeEventListener('keydown',marketKey,true);window.removeEventListener('contextmenu',menu);window.removeEventListener('pointerdown',unlockAudio);
         window.removeEventListener('pointermove',filterWarp,true);
         document.removeEventListener('pointerlockchange',syncCapture);document.removeEventListener('pointerlockerror',captureError);
         release();port?.removeEventListener('message',update);void audio?.close().catch(()=>{});ui.dispose();};

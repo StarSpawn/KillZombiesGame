@@ -1,6 +1,6 @@
 import type { Box, Vec3 } from './fracture.ts';
 
-export const DECK=4.6, FENCE_Z=-6, MAX_LIVE=28;
+export const DECK=4.6, DECK_HALF=13.5, WALK_X=DECK_HALF-.5, FENCE_Z=-6, MAX_LIVE=28;
 // Shared street coordinates keep entrances aligned with the district mesh.
 export const CITY_SHIFT=18, ENTRY_X=33, FRONT=-17-CITY_SHIFT, ROOF_Y=7, WINDOW_Y=3.1;
 export const entryKinds=['alley','shop','window','roof'] as const;
@@ -26,16 +26,17 @@ export const outpost:Piece[]=[], gate:Piece[]=[];
 function add(x:number,y:number,z:number,sx:number,sy:number,sz:number,color:number,roll=0,target=outpost){
   target.push({x,y,z,sx,sy,sz,color,roll});
 }
-add(0,DECK-.22,3.4,9,.44,6.8,3);
-for(let i=0;i<19;i++)add((i-9)*.47,DECK-.02,3.4,.455,.06,6.75,i%3===0?6:2);
-for(const x of [-4.28,4.28]){
+add(0,DECK-.22,3.4,DECK_HALF*2,.44,6.8,3);
+for(let i=0;i<57;i++)add((i-28)*.47,DECK-.02,3.4,.455,.06,6.75,i%3===0?6:2);
+for(const x of [-DECK_HALF+.18,DECK_HALF-.18]){
   for(const z of [.16,6.65]){add(x,DECK/2,z,.32,DECK,.32,5);add(x,DECK+1.8,z,.15,3.6,.15,3);}
   for(const y of [DECK+.42,DECK+.84])add(x,y,3.4,.09,.09,6.55,4);
 }
-for(const y of [DECK+.42,DECK+.84])add(0,y,6.65,8.5,.09,.09,4);
-add(0,DECK+3.69,3.4,9.6,.22,7.4,5);
-add(0,DECK+3.54,.05,8.65,.14,.24,6);
-for(const x of [-3.3,3.3])add(x,DECK+3.43,.42,.73,.10,.31,13);
+for(const y of [DECK+.42,DECK+.84])add(0,y,6.65,DECK_HALF*2-.35,.09,.09,4);
+add(0,DECK+3.69,3.4,DECK_HALF*2+.6,.22,7.4,5);
+add(0,DECK+3.54,.05,DECK_HALF*2-.25,.14,.24,6);
+for(const x of [-9,0,9]){add(x,DECK/2,6.65,.30,DECK,.30,5);add(x,DECK+1.8,6.65,.14,3.6,.14,3);}
+for(const x of [-10,-3.3,3.3,10])add(x,DECK+3.43,.42,.73,.10,.31,13);
 // The striped rear loading hoist marks the truck interaction point from the deck.
 add(3,DECK+.05,5.92,1.55,.08,1.05,9);
 for(let n=0;n<5;n++)add(2.42+n*.29,DECK+.10,5.92,.13,.025,1.0,8);
@@ -43,10 +44,11 @@ add(4.13,DECK+1.34,5.92,.18,2.68,.22,3);
 add(3.72,DECK+2.55,5.92,1.08,.18,.20,4);
 add(3.28,DECK+1.68,5.92,.035,1.55,.035,5);
 add(3.27,DECK+.8,6.38,1.3,.42,.51,6);
-for(const side of [-1,1]){
-  add(side*11,3,-8,.24,6,.24,5);
-  add(side*11,6.18,-8,1.02,.42,.52,3);
-  add(side*11,6.18,-7.72,.85,.28,.035,13);
+// Yard lights sit behind the firing line at the two wings.
+export const yardLights:Vec3[]=[[-26,4.7,7.3],[28.8,4.7,7.3]];
+for(const [x,y,z] of yardLights){
+  add(x,(y-.2)/2,z,.18,y-.2,.18,5);
+  add(x,y,z,.82,.34,.46,3);
 }
 // One panel is instanced in both directions; the two middle bays break with the gate.
 export const panel:Piece[]=[];

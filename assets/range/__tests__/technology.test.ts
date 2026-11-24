@@ -24,13 +24,13 @@ describe('outpost technology',()=>{
     expect(restoreWallet(w)).toEqual(w);
   });
   it('requires reaching the arrived truck, preserves full pickups and caps at three',()=>{
-    const w=restoreWallet({tech:['truck','rocket'],primary:'lmg',secondary:'rocket'}),a=ammunition(true),f=new Field(api(),w,a);
+    const w=restoreWallet({tech:['truck','rocket','shotgun'],primary:'rocket',secondary:'shotgun'}),a=ammunition(true),f=new Field(api(),w,a);
     const point:[number,number,number]=[3,DECK,5.92];
     a.rocket.spare=0;f.interact(point);expect(a.rocket.spare).toBe(0);
     f.tick(4,1);f.interact([0,DECK,2]);expect(f.truckUses).toBe(3);
     f.interact(point);expect(a.rocket.spare).toBe(1);f.interact(point);
     f.interact(point);expect(f.truckUses).toBe(1);
-    a.lmg.spare=0;f.interact(point);expect(a.lmg.spare).toBe(Math.ceil(capacity('lmg',true)/2));
+    a.shotgun.spare=0;f.interact(point);expect(a.shotgun.spare).toBe(Math.ceil(capacity('shotgun',true)/2));
     expect(f.truckUses).toBe(0);f.interact(point);expect(f.truckUses).toBe(0);
   });
   it('charges each delivered airdrop once, independently of radio calls',()=>{

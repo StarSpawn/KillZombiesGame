@@ -25,6 +25,7 @@ export const operationsCss=`
   header,aside,.vitals,.ammo{background:linear-gradient(90deg,#131e1de8,#1a2420a8);border-left:3px solid #aaa57b;padding:8px 12px}
   aside,.ammo{border-left:0;border-right:3px solid #c98a57}.cash{color:#e6c692}.route i{background:#bf6350}
   .market{background:#101816eb}.tree-ledger{width:min(1150px,96%);padding:16px 20px;background:#242d29;border-top:4px solid #b45a45}
+  .loadout{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0 0 10px}.loadout label{color:#dcdcc8;font-size:13px}.loadout select{margin-left:4px;padding:3px 6px;color:#f2e6ce;background:#18251e;border:1px solid #7c856d}
   .tech-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,23%);gap:14px}
   .chart-scroll{overflow:auto;max-height:61vh;background-color:#17231f;background-image:linear-gradient(#93a99512 1px,transparent 1px),linear-gradient(90deg,#93a99512 1px,transparent 1px);background-size:22px 22px;scrollbar-color:#596859 #1c2623}
   .chart{position:relative;width:860px;height:785px}.chart .wire{position:absolute;background:#657566;pointer-events:none}.chart [data-active=yes]{background:#cbb47c}

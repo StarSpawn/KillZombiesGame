@@ -14,9 +14,13 @@ export const MOSIN_IMPACT=1.85;
 export const nextZoom=(zoom:number)=>zoom===2?4:zoom===4?6:2;
 export const scopeFov=(zoom:number)=>2*Math.atan(Math.tan(1.25/2)/zoom);
 export const BOUNTY = 15;
-export const weaponSlot=(gun:Gun)=>['g18','shotgun','rocket'].includes(gun)?'secondary':'primary';
+export const weaponSlot=(gun:Gun)=>(gun==='g18'||gun==='shotgun')?'secondary':'primary';
 export const initialWallet = () => ({ cash: 0, owned: ['g18'] as Gun[], best: 0, bestWave: 0, tech: ['g18'] as string[], trial: false, primary:null as Gun|null, secondary:'g18' as Gun });
 export type Wallet = ReturnType<typeof initialWallet>;
+export function otherCarriedGun(wallet:Wallet,current:Gun){
+  if(!wallet.primary)return wallet.secondary;
+  return current===wallet.primary?wallet.secondary:wallet.primary;
+}
 export function restoreWallet(value: Partial<Wallet> | null): Wallet {
   const cleanInt = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
   const ids=new Set<string>(['g18']);
@@ -28,7 +32,11 @@ export function restoreWallet(value: Partial<Wallet> | null): Wallet {
   }
   if(Array.isArray(value?.tech))value.tech.forEach(restore);
   if(Array.isArray(value?.owned))value.owned.forEach(restore);
+  // The launcher used to occupy the secondary slot. Preserve an explicitly equipped
+  // primary, or move the old launcher across when that slot was empty.
+  const migratedLauncher=value?.secondary==='rocket' && ids.has('rocket')?'rocket':null;
   const primary=GUNS.find(g=>g===value?.primary && ids.has(g) && weaponSlot(g)==='primary')
+    ?? migratedLauncher ?? (Array.isArray(value?.owned)?value.owned.find(g=>GUNS.includes(g) && ids.has(g) && weaponSlot(g)==='primary'):null)
     ?? GUNS.find(g=>ids.has(g) && weaponSlot(g)==='primary') ?? null;
   const secondary=GUNS.find(g=>g===value?.secondary && ids.has(g) && weaponSlot(g)==='secondary')??'g18';
   return {primary,secondary,cash:cleanInt(value?.cash),best:cleanInt(value?.best),bestWave:cleanInt(value?.bestWave),

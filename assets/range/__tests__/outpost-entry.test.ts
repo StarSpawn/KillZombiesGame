@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { Vec3 } from '../fracture.ts';
-import { DECK, entryPath, entryKind, FENCE_Z, fenceBays } from '../outpost.ts';
+import { DECK, WALK_X, entryPath, entryKind, FENCE_Z, fenceBays, outpost } from '../outpost.ts';
 import { waveCount, waveChoices } from '../waves.ts';
 import { ARMORY, BOUNTY, equip, initialWallet, restoreWallet } from '../loadout.ts';
-import { firstBuilding } from '../district.ts';
+import { district, firstBuilding } from '../district.ts';
 
 function sight(from:Vec3,to:Vec3){
   const delta:Vec3=[to[0]-from[0],to[1]-from[1],to[2]-from[2]];
@@ -21,10 +21,16 @@ describe('Berlin street entrances',()=>{
     expect(wallet.cash).toBe(0);
     expect(restoreWallet(wallet).owned).toEqual(['g18','mosin']);
   });
+  it('keeps fixed scenery below sight level in the apron ahead of the gallery',()=>{
+    const blockers=[...outpost,...district].filter(b=>
+      Math.abs(b.x)-b.sx/2<WALK_X && b.z-b.sz/2<-.5 && b.z+b.sz/2>-25 &&
+      b.y+b.sy/2>2.8 && b.y-b.sy/2<DECK+2);
+    expect(blockers).toEqual([]);
+  });
   it('conceals the entire spawning body even at the extremes of the jumping platform',()=>{
     for(let wave=1;wave<=2;wave++)for(let i=0;i<30;i++){
       const [start]=entryPath(i,wave);
-      for(const x of [-3.98,3.98])for(const z of [.43,6.32])for(const y of [DECK+1.65,DECK+3.05]){
+      for(const x of [-WALK_X,0,WALK_X])for(const z of [.43,6.32])for(const y of [DECK+1.65,DECK+3.05]){
         for(const side of [-.6,.6])for(const height of [.1,2.1]){
           expect(sight([x,y,z],[start[0]+side,start[1]+height,start[2]+.4]),JSON.stringify({entrance:entryKind(i,wave),start,x,y,z,side,height})).toBeLessThan(.99);
         }

@@ -60,8 +60,18 @@ export function dressVoxel(outfit:number,part:number,box:Box):Box {
   return {...box,color:accent?trim:box.color===3?shade:base};
 }
 
-// Join adjacent identically painted cells for the shared intact meshes only.
-export function compactVoxels(voxels:Box[]):Box[] {
+// Keep the original cell membership so undamaged runs can also be reused after a hit.
+export type VoxelRun={box:Box; cells:number[]};
+export function visibleRuns(runs:VoxelRun[],painted:Box[],alive:Uint8Array){
+  const result:Box[]=[];
+  for(const {box,cells} of runs){
+    if(cells.every(i=>alive[i]))result.push(box);
+    else for(const i of cells)if(alive[i])result.push(painted[i]);
+  }
+  return result;
+}
+export function compactVoxels(voxels:Box[],runs?:VoxelRun[]):Box[] {
+  const members=runs?new Map(voxels.map((box,i)=>[box,[i]])):null;
   for(const [axis,extent,otherA,sizeA,otherB,sizeB] of [
     ['z','sz','x','sx','y','sy'],['x','sx','y','sy','z','sz'],['y','sy','x','sx','z','sz']
   ] as const){
@@ -79,9 +89,11 @@ export function compactVoxels(voxels:Box[]):Box[] {
         if(last && Math.abs(last[axis]+last[extent]/2-box[axis]+box[extent]/2)<1e-6){
           last[axis]+=box[extent]/2;
           last[extent]+=box[extent];
-        }else{last={...box};voxels.push(last);}
+          if(members)members.get(last)!.push(...members.get(box)!);
+        }else{last={...box};voxels.push(last);if(members)members.set(last,[...members.get(box)!]);}
       }
     }
   }
+  if(runs && members)for(const box of voxels)runs.push({box,cells:members.get(box)!});
   return voxels;
 }

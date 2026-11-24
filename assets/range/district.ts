@@ -55,6 +55,15 @@ function block(x:number,z:number,w:number,d:number,floors:number,paint:string,mo
     box(wx,1.52,edge(.10),pitch*.76,2.24,.13,i===0?'#39484e':'#617476');
     box(wx,2.90,edge(.27),pitch*.92,.25,.71,store==='KINO'?'#934e46':'#717860');
   }
+  // Exposed, staggered brick courses at the worn corner give the silhouette a voxel-scale relief.
+  if(!modern){
+    const edgeX=x-w/2+.29;
+    for(let row=0;row<5;row++){
+      const bricks=[4,3,3,1,2][row];
+      for(let i=0;i<bricks;i++)box(edgeX+i*.48+(row%2)*.14,.51+.25*row,edge(.12),.45,.21,.22,
+        (row+i)%3===0?'#74584b':'#846d5c');
+    }
+  }
   if(store)shopSign(store,x,3.22,edge(.48),'#504c4b');
 }
 box(0,-.22,0,330,.40,300,'#786f59');
@@ -126,28 +135,84 @@ for(const side of [-1,1]){
   box(x,20.05,-25,.23,.30,.23,'#bf5542');
 }
 shopSign('SPERRGEBIET',11,7.9,-16.4,'#743c34',.23);
-for(const x of [-8,8]){
-  box(x,2.15,-11,.22,4.3,.22,'#45504a');
-  box(x,3.25,-11,1.27,1.18,.19,'#804338');
-  box(x,3.26,-10.88,.76,.16,.045,'#d2c5a1');
-}
 // Move the entire western block together, including its shared collision boxes.
 for(const piece of district)if(piece.z<0)piece.z-=CITY_SHIFT;
 const lotEdge=-7.6-CITY_SHIFT;
 box(0,-.025,(-6+lotEdge)/2,265,.07,-6-lotEdge,'#69695e');
-// The two flags share their stripes. The east flag also carries its gold wreath emblem.
-function banner(x:number,y:number,z:number,east:boolean){
-  box(x-1.52,y-.70,z,.10,4.4,.10,'#5b6160');
-  for(const [i,shade] of ['#252726','#913f34','#c0a254'].entries())box(x,y+(.5-i*.5),z,3,.5,.065,shade);
-  if(east){
-    for(let i=0;i<10;i++){const a=(i+1)*Math.PI*2/12;box(x+Math.sin(a)*.31,y+Math.cos(a)*.32,z+.05,.105,.125,.04,'#c7a856');}
-    box(x,y,z+.065,.07,.43,.04,'#d7bb69');box(x+.035,y+.15,z+.065,.24,.074,.04,'#d7bb69');
+shopSign('WEST BERLIN',15,6.55,-16.53-CITY_SHIFT,'#38494d',.26);
+// The brick dispatch office faces the left end of the gallery, with the lettering flush to its wall.
+solid(-32,2.05,5,7.8,4.1,9.4,'#916b58');
+box(-32,4.18,5,8.25,.30,9.85,roof);
+box(-27.86,.32,5,.56,.64,9.65,'#938c7e');
+for(const z of [2.1,4.5,6.9]){
+  box(-28.05,2.18,z,.12,1.65,1.64,'#303c3b');
+  box(-27.95,2.2,z,.11,1.39,1.42,z===4.5?'#c09961':'#64726d');
+  box(-27.88,2.2,z,.10,1.44,.09,'#494740');
+  box(-27.88,2.2,z,.10,.085,1.46,'#494740');
+  box(-27.85,1.32,z,.47,.15,1.96,stone);
+}
+// An upper signal room rises above the long deck when viewed from its centre.
+solid(-32.4,5.78,5.8,6.7,3.14,7.25,'#916b58');
+box(-32.4,7.45,5.8,7.14,.23,7.65,roof);
+for(const z of [3.25,5.75,8.25]){
+  box(-29,5.96,z,.15,1.66,1.72,'#303c3b');
+  box(-28.89,5.95,z,.10,1.45,1.53,z===5.75?'#baa071':'#677871');
+  box(-28.79,5.95,z,.1,1.49,.10,'#443e34');
+  box(-28.79,5.95,z,.1,.10,1.58,'#443e34');
+  box(-28.79,5.07,z,.41,.17,1.96,stone);
+}
+const signStart=district.length;
+shopSign('DDR POST',0,4.65,0,'#424c48',.15);
+for(const piece of district.slice(signStart)){
+  const localX=piece.x;piece.x=-29.01+piece.z;piece.z=5-localX;
+  [piece.sx,piece.sz]=[piece.sz,piece.sx];
+}
+// Three stepped brick chimney courses, an aerial and ribbed ceramics break the western roofline.
+box(-33.7,8.62,8.2,1.04,2.3,1.06,'#9d7c68');
+box(-33.7,9.82,8.2,1.26,.22,1.28,roof);
+box(-33.7,10.02,8.2,.82,.20,.87,'#574f49');
+for(const x of [-39,-53]){
+  box(x,4.55,4.8,.34,9.1,.34,'#706151');
+  for(const y of [7.45,8.53]){
+    box(x,y,4.8,.26,.19,3.1,'#5e5046');
+    for(const z of [3.61,5.99])box(x,y+.24,z,.27,.36,.29,'#acafa0');
   }
 }
-banner(11.3,8.2,-16.15-CITY_SHIFT,false);
-shopSign('WEST BERLIN',15,6.55,-16.53-CITY_SHIFT,'#38494d',.26);
-banner(-9.7,4.4,-5.5,true);
-shopSign('DDR',-9.7,2.92,-5.42,'#555a4d',.16);
+// The eastern loading shed has a stepped clerestory, corrugated shutters and pallet stacks.
+solid(37,2.63,5.75,9.2,5.26,10.7,'#727971');
+box(36.7,.48,5.75,11.6,.96,12.5,'#7f8073');
+for(let i=0;i<3;i++){
+  const z=2.15+i*3.55;
+  box(37,5.38,z,9.65,.25,3.57,roof);
+  box(37,5.78,z+.77,9.1,.59,1.78,'#475354');
+  box(37,6.13,z+.77,9.47,.17,2.05,roof);
+}
+for(const z of [3,8.2]){
+  box(32.34,2.55,z,.17,3.04,3.58,'#404846');
+  for(let k=0;k<7;k++)box(32.23,1.28+k*.40,z,.13,.19,3.36,k%3?'#636b63':'#746d59');
+  box(31.75,4.24,z,1.57,.19,4.26,roof);
+}
+for(const [x,z,levels] of [[24,2.4,2],[25.4,5.4,3],[27.8,6.1,1],[23.1,7.5,1]]){
+  for(let layer=0;layer<levels;layer++){
+    const y=.20+layer*1.02;
+    box(x,y,z,2.13,.19,1.49,'#524e43');
+    box(x,y+.51,z,1.95,.84,1.31,layer%2?'#777361':'#897253');
+    for(const strap of [-.61,.61])box(x+strap,y+.52,z,.12,.87,1.34,'#4f5149');
+  }
+}
+// A rail-mounted lifting frame makes the loading yard recognizable above the platform edge.
+for(const x of [29.4,39.8])for(const z of [1.35,10.85]){
+  box(x,3.98,z,.33,7.96,.36,'#58574b');
+  box(x,.28,z,.85,.56,.89,stone);
+}
+for(const x of [29.4,39.8])box(x,8.05,6.1,.52,.32,10.15,'#695e47');
+for(const z of [3.38,4.03]){
+  box(34.6,8.45,z,11.25,.50,.23,'#a38452');
+  box(34.6,8.73,z,11.45,.12,.31,'#564f43');
+}
+box(32.8,8.05,3.71,1.18,.55,1.17,'#5c5b4e');
+box(32.8,6.98,3.71,.09,1.68,.09,'#3d4442');
+box(32.8,6.13,3.71,.41,.23,.27,'#9a7750');
 // Courtyard, warehouse doors and rail sidings occupy the reverse view from the tower.
 box(0,.01,14,220,.06,9,'#666967');
 for(const z of [21,23.2,27.5,29.7])box(0,.14,z,200,.13,.12,'#53585a');

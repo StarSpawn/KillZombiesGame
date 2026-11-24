@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { ammunition, ARMORY, GUNS, MOSIN_IMPACT, nextZoom, scopeFov, equip, initialWallet, refill, restoreWallet, shotOffset } from '../loadout.ts';
+import { ammunition, ARMORY, GUNS, MOSIN_IMPACT, nextZoom, scopeFov, otherCarriedGun, weaponSlot, equip, initialWallet, refill, restoreWallet, shotOffset } from '../loadout.ts';
 import { ROOM_X, ROOM_FLOOR, floorHeight, fires, blocksPlayer, DISTANCE, DOCK, feedBoxes, gunBoxes, reloadPose, spawnPositions, START, wallDistance } from '../street.ts';
 
 import { PARTS, createBodyDamage, breakAt, remainingBoxes } from '../fracture.ts';
-import { outfits, dressVoxel } from '../outfits.ts';
+import { outfits, compactVoxels, visibleRuns, type VoxelRun, dressVoxel } from '../outfits.ts';
 
 describe('street escape', () => {
   it('issues the wave pistol reserve and conserves rounds on a partial reload', () => {
@@ -27,6 +27,23 @@ describe('street escape', () => {
     expect(wallet.cash).toBe(0);
     expect(restoreWallet(JSON.parse(JSON.stringify(wallet)))).toEqual(wallet);
     expect(restoreWallet(null)).toEqual(initialWallet());
+  });
+  it('replaces only the matching loadout slot and cycles the weapons carried',()=>{
+    const w=restoreWallet({tech:['rocket','shotgun'],primary:'lmg',secondary:'shotgun'});
+    expect(GUNS.filter(g=>weaponSlot(g)==='secondary')).toEqual(['g18','shotgun']);
+    expect(equip(w,'rocket')).toBe(true);
+    expect([w.primary,w.secondary]).toEqual(['rocket','shotgun']);
+    expect(otherCarriedGun(w,'rocket')).toBe('shotgun');
+    expect(otherCarriedGun(w,'shotgun')).toBe('rocket');
+    expect(otherCarriedGun(initialWallet(),'g18')).toBe('g18');
+    expect(restoreWallet(w)).toEqual(w);
+  });
+  it('migrates legacy launchers while preserving ownership and valid primary selections',()=>{
+    const legacy={tech:['rocket'],secondary:'rocket' as const};
+    expect(restoreWallet(legacy)).toMatchObject({primary:'rocket',secondary:'g18'});
+    const both=restoreWallet({...legacy,primary:'lmg'});
+    expect(both).toMatchObject({primary:'lmg',secondary:'g18'});
+    expect(both.owned).toContain('rocket');
   });
   it('leaves room to walk and shoot through the safe-house door and onto the dock', () => {
     expect(floorHeight(ROOM_X,START)).toBe(ROOM_FLOOR);
@@ -60,6 +77,18 @@ describe('street escape', () => {
     expect(new Set(crowd.map((_,i)=>outfits[(i*8)%outfits.length][0])).size).toBe(21);
     const patterns=outfits.map((_,i)=>PARTS[0].boxes.map(box=>dressVoxel(i,0,box).color).join(','));
     expect(new Set(patterns).size).toBe(21);
+  });
+  it('reuses intact voxel runs and preserves every surviving painted cell after a hit',()=>{
+    const painted=PARTS[0].boxes.map(b=>dressVoxel(0,0,b)),runs:VoxelRun[]=[];
+    compactVoxels(painted,runs);
+    const indices=runs.flatMap(run=>run.cells).sort((a,b)=>a-b);
+    expect(indices).toEqual(painted.map((_,i)=>i));
+    const alive=new Uint8Array(painted.length).fill(1);
+    for(let i=0;i<18;i++)alive[i]=0;
+    const retained=visibleRuns(runs,painted,alive);
+    expect(retained.length).toBeLessThan(painted.length/2);
+    const volume=(boxes:typeof painted)=>boxes.reduce((sum,b)=>sum+b.sx*b.sy*b.sz,0);
+    expect(volume(retained)).toBeCloseTo(volume(painted.filter((_,i)=>alive[i])),6);
   });
   it('applies uniforms on surviving voxels with identical collision and display geometry',()=>{
     const body=createBodyDamage(),brick=PARTS[0].boxes.findIndex(b=>b.z>.19 && b.y>1.5 && b.color<4);

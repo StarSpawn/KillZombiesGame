@@ -7,22 +7,22 @@ import type { Plugin } from '@forgeax/engine/plugin';
 import { Camera, DirectionalLight, Fog, FogModeValue, Instances, Materials, MeshFilter, MeshRenderer, PointLight, ShadowParticipation, Skylight, perspective } from '@forgeax/engine/render';
 import { Transform } from '@forgeax/engine/scene';
 import type { Asset, AssetHandle, MeshAsset } from '@forgeax/engine/types';
-import { FragmentPool, PARTS, SMALL_LIMIT, hitPart, createBodyDamage, remainingBoxes, breakAt, type BodyDamage, type Hit, type Fragment, type Box, type Vec3 } from './fracture.ts';
+import { FragmentPool, PARTS, SMALL_LIMIT, hitPart, createBodyDamage, breakAt, type BodyDamage, type Hit, type Fragment, type Box, type Vec3 } from './fracture.ts';
 import { bodyScale, createMotion, fragmentPose, localPoint, localVector, movementMode, toWorld, walk, type Motion } from './motion.ts';
 import { woundDetails } from './wounds.ts';
 import { BloodPool, BLOOD_COLORS, BLOOD_LIMIT } from './blood.ts';
 import { SHOTGUN_PELLETS } from './weapons.ts';
-import { GUNS, ARMORY, BOUNTY, MOSIN_IMPACT, nextZoom, scopeFov, shotOffset, ammunition, equip, initialWallet, restoreWallet, refill, type Gun } from './loadout.ts';
+import { GUNS, ARMORY, BOUNTY, MOSIN_IMPACT, nextZoom, scopeFov, shotOffset, ammunition, equip, otherCarriedGun, initialWallet, restoreWallet, refill, type Gun } from './loadout.ts';
 import { gunBoxes, type ViewPiece, sightHeight, gunColors, supportHand, feedBoxes, reloadPose } from './gun-model.ts';
 import { Field } from './field.ts';
-import { fieldColors, fieldModel, stationPositions } from './field-models.ts';
+import { fieldColors, fieldModel, stationPositions, soldierIds, SHOULDER, HEAVY_PIVOT, SIGHT_RISE } from './field-models.ts';
 import { purchase } from './loadout.ts';
 import { orderName, techById } from './technology.ts';
 import { waveCount, waveChoices } from './waves.ts';
-import { DECK, FENCE_Z, MAX_LIVE, entryKind, entryPath, panel, fenceBays, outpost, gate, colors } from './outpost.ts';
+import { DECK, DECK_HALF, WALK_X, FENCE_Z, MAX_LIVE, entryKind, entryPath, panel, fenceBays, yardLights, outpost, gate, colors } from './outpost.ts';
 import { surfaceTexture, type Surface } from './surfaces.ts';
 import { district, districtColors, firstBuilding } from './district.ts';
-import { outfits, bodyColors, firstFleshColor, compactVoxels, dressVoxel } from './outfits.ts';
+import { outfits, bodyColors, firstFleshColor, compactVoxels, visibleRuns, type VoxelRun, dressVoxel } from './outfits.ts';
 
 type Phase = 'intro' | 'run' | 'down' | 'supply' | 'choose';
 type Zombie = {
@@ -199,7 +199,12 @@ export const voxelRange: Plugin.Object = {
         spawned.push(entity);
         return entity;
       };
-      const batch = (assetHandle: AssetHandle<'mesh'>, material: AssetHandle<'material'>, capacity: number, castsShadow = true) => {
+      // Draw a subpixel instance behind the title overlay so the first shot can reuse
+      // the combat material pipelines. No live ammunition or gameplay state is used.
+      let warmFrames=3;
+      const warmTransform=mat4.create();
+      mat4.compose(warmTransform,[0,DECK+1,-2],quat.create(),[.001,.001,.001]);
+      const batch = (assetHandle: AssetHandle<'mesh'>, material: AssetHandle<'material'>, capacity: number, castsShadow = true, warm=false) => {
         const entity = world.spawn(
           { component: Transform, data: {} },
           { component: MeshFilter, data: { assetHandle } },
@@ -219,6 +224,7 @@ export const voxelRange: Plugin.Object = {
             return true;
           },
           publish() {
+            if(warm && warmFrames>0 && !size){buffer.set(warmTransform);size=1;}
             if (size !== published) {
               world.set(entity, Instances, { transforms: size ? buffer.subarray(0, size * 16) : emptyTransforms }).unwrap();
               published = size;
@@ -257,12 +263,11 @@ export const voxelRange: Plugin.Object = {
       }
       const fence=mesh(retain(viewModel(gate,sceneColors)),bodyMaterial,zero,unit);
       const lampWarm=retain(Materials.unlit('#ffc88b')), lampAlarm=retain(Materials.unlit('#ee6048'));
-      for(const side of [-1,1]){
-        const x=side*11;
-        mesh(boxMesh,lampWarm,[x,6.18,-7.67],[.8,.24,.06]);
-        mesh(boxMesh,lampAlarm,[x,6.65,-8],[.19,.24,.19]);
-        spawned.push(world.spawn({component:Transform,data:{pos:[x,4.3,-10]}},
-          {component:PointLight,data:{color:color.linearRgb(0xffb371),intensity:65,range:13}}).unwrap());
+      for(const [x,y,z] of yardLights){
+        mesh(boxMesh,lampWarm,[x,y-.06,z-.24],[.6,.18,.045]);
+        mesh(boxMesh,lampAlarm,[x,y+.25,z],[.14,.18,.14]);
+        spawned.push(world.spawn({component:Transform,data:{pos:[x,y-.45,z-.7]}},
+          {component:PointLight,data:{color:color.linearRgb(0xffb371),intensity:56,range:12}}).unwrap());
       }
       const crowdSize=MAX_LIVE+8;
       const gunMeshes = Object.fromEntries(GUNS.map(g => [g, retain(viewModel(gunBoxes(g), tintPalette(gunColors))) ])) as Record<Gun, AssetHandle<'mesh'>>;
@@ -272,37 +277,60 @@ export const voxelRange: Plugin.Object = {
       const feeds=Object.fromEntries(GUNS.map(g=>[g,retain(viewModel(feedBoxes(g),gunPalette))])) as Record<Gun,AssetHandle<'mesh'>>;
       const feed=mesh(feeds.g18,bodyMaterial,[0,-20,0],unit);
       const legBatches=PARTS.slice(4).map(part=>batch(retain(mergeBoxes(part.intact,zero)),bodyMaterial,crowdSize));
-      const bodiesByOutfit=outfits.map((_,outfit)=>[
-        ...PARTS.slice(0,4).map((part,index)=>{
-          const boxes=compactVoxels(part.boxes.map(box=>dressVoxel(outfit,index,box)));
-          return batch(retain(mergeBoxes(boxes,zero)),bodyMaterial,crowdSize);
-        }),...legBatches
+      const outfitsByPart=outfits.map((_,outfit)=>PARTS.map((part,index)=>{
+        const painted=part.boxes.map(box=>dressVoxel(outfit,index,box));
+        const runs:VoxelRun[]=[];
+        const compact=compactVoxels(painted,runs);
+        return {painted,runs,compact};
+      }));
+      const bodiesByOutfit=outfitsByPart.map(parts=>[
+        ...parts.slice(0,4).map(part=>batch(retain(mergeBoxes(part.compact,zero)),bodyMaterial,crowdSize)),...legBatches
       ]);
       const bodyBatches=[...new Set(bodiesByOutfit.flat())];
       const largeMeshes = new Map<Readonly<Fragment>, { entity: EntityHandle; generation: number }>();
-      const tracerBatch = batch(boxMesh, retain(Materials.unlit('#ffe29a')), 36);
+      const tracerBatch = batch(boxMesh, retain(Materials.unlit('#ffe29a')), 36,true,true);
       const tracers: { start: Vec3; end: Vec3; life: number; width: number }[] = [];
-      const bloodBatches = BLOOD_COLORS.map(hex => batch(boxMesh, retain(Materials.unlit(hex)), BLOOD_LIMIT));
-      const chipBatches = chipMats.map(material => batch(boxMesh, material, SMALL_LIMIT));
-      const remainsBatch = batch(retain(remainsMesh()), bodyMaterial, crowdSize);
+      const bloodBatches = BLOOD_COLORS.map(hex => batch(boxMesh, retain(Materials.unlit(hex)), BLOOD_LIMIT,true,true));
+      const chipBatches = chipMats.map(material => batch(boxMesh, material, SMALL_LIMIT,true,true));
+      const remainsBatch = batch(retain(remainsMesh()), bodyMaterial, crowdSize,true,true);
       let remainsCount = 0;
       const footBatch = batch(boxMesh, footMaterial, crowdSize);
 
       const fieldActors=new Map<string,EntityHandle>();
       const modelColors=tintPalette(fieldColors);
-      function poseField(id:string,pos:Vec3|null,yaw=0){
+      const fieldMeshes=new Map<string,AssetHandle<'mesh'>>();
+      function placeFieldPart(id:string,model:string,pos:Vec3|null,yaw:number,pitch=0){
         let entity=fieldActors.get(id);
         if(!entity && !pos)return;
-        if(!entity){entity=mesh(retain(viewModel(fieldModel(id),modelColors)),bodyMaterial,pos!,unit);fieldActors.set(id,entity);}
-        world.set(entity,Transform,{pos:pos??[0,-80,0],quat:quat.fromEuler(quat.create(),0,yaw,0,'XYZ')}).unwrap();
+        if(!entity){
+          let handle=fieldMeshes.get(model);
+          if(!handle){handle=retain(viewModel(fieldModel(model),modelColors));fieldMeshes.set(model,handle);}
+          entity=mesh(handle,bodyMaterial,pos!,unit);fieldActors.set(id,entity);
+        }
+        world.set(entity,Transform,{pos:pos??[0,-80,0],quat:quat.fromEuler(quat.create(),pitch,yaw,0,'YXZ')}).unwrap();
+      }
+      function poseField(id:string,pos:Vec3|null,yaw=0,pitch=0,recoil=0,stride=0){
+        if(id==='heavy'){
+          placeFieldPart(id,id,pos,0);
+          const slide=recoil*recoil*.064;
+          placeFieldPart('heavyGun','heavyGun',pos && [pos[0]+Math.sin(yaw)*slide,pos[1]+HEAVY_PIVOT,pos[2]+Math.cos(yaw)*slide],yaw,pitch+slide*.22);
+        }else if(soldierIds.includes(id)){
+          for(const side of [-1,1]){
+            const leg=side<0?'legLeft':'legRight',step=stride*side*.15;
+            placeFieldPart(id+leg,leg,pos && [pos[0]+Math.sin(yaw)*step,pos[1]+Math.max(0,step)*.36,pos[2]+Math.cos(yaw)*step],yaw);
+          }
+          const back=.065*recoil,upper=id==='crew'?'crewUpper':'upper';
+          placeFieldPart(id+'upper',upper,pos && [pos[0]+Math.sin(yaw)*back,pos[1]+SHOULDER-.028*recoil,
+            pos[2]+Math.cos(yaw)*back],yaw,pitch+.09*recoil);
+        }else placeFieldPart(id,id,pos,yaw,pitch);
       }
       const bursts:{pos:Vec3;radius:number;life:number}[]=[];
       const sparks=batch(boxMesh,retain(Materials.unlit('#ffac51')),72,false);
       const smoke=batch(boxMesh,retain(Materials.standard({baseColor:'#525959',roughness:1})),72,false);
-      const mist=color.linearRgb(0x506563);
+      const mist=color.linearRgb(0x455553);
       const fog=world.spawn({component:Fog,data:{mode:FogModeValue.linear,color:mist,near:23,far:113,maxOpacity:.98}}).unwrap();
       const rainCount=620;
-      const rainfall=batch(boxMesh,retain(Materials.unlit('#899aa2')),rainCount,false);
+      const rainfall=batch(boxMesh,retain(Materials.unlit('#798a8c')),rainCount,false);
       const rainRotation=quat.fromEuler(quat.create(),0,0,.13,'XYZ');
       // Conservative radius of the largest .013 × .30 × .013 rain box.
       const rainRadius=.16;
@@ -321,7 +349,7 @@ export const voxelRange: Plugin.Object = {
         direction: [-0.72, -0.42, 0.45], color: color.linearRgb(0xffad6c), intensity: .57,
       } }).unwrap();
       const ambient = world.spawn({ component: Skylight, data: {
-        color: color.linearRgb(0xb3c2cd), groundColor: color.linearRgb(0x53565b), intensity: .67,
+        color: color.linearRgb(0xb3c2cd), groundColor: color.linearRgb(0x53565b), intensity: .60,
       } }).unwrap();
       const camera = world.spawn({ component: Transform, data: {} }, {
         component: Camera, data: perspective({ fov: 1.24, aspect: 16/9, near: .035, far: 385 }),
@@ -355,7 +383,7 @@ export const voxelRange: Plugin.Object = {
           blastCount,truckDocked:(field?.arrival??0)>=4,commandCount:field?.orders().length??0,truckUses:field?.truckUses??0,dropIn:field?.dropIn??0,dropWaiting:!!field?.drop && field.dropIn===0,
           mounted:field?.mounted??null,mountAmmo:field?.mounted?field.belts[field.mounted]:0,
           prompt:field?.prompt([x,feet,z])??'',wave,total:waveCount(wave),spawned:spawnedCount,choices:waveChoices(wallet.bestWave,wave),
-          zoom,loaded:ammo[weapon].loaded,spare:ammo[weapon].spare,aiming,reload,hitMarker,hurt,notice,ready:restored};
+          zoom,loaded:ammo[weapon].loaded,spare:ammo[weapon].spare,aiming,reload,hitMarker,hurt,notice,ready:restored && !warmFrames};
       }
       function state() { port?.postMessage({ type: 'state', ...snapshot() }); }
       function save() { if (restored) port?.postMessage({ type: 'save', wallet }); }
@@ -396,6 +424,11 @@ export const voxelRange: Plugin.Object = {
         const viewPitch=Math.max(-1.42,Math.min(1.42,pitch+kick));
         forward = [Math.sin(yaw+sway)*Math.cos(viewPitch),Math.sin(viewPitch),-Math.cos(yaw+sway)*Math.cos(viewPitch)];
         right=normalized(cross(forward,up)); vertical=cross(right,forward);
+        if(field?.mounted==='heavy'){
+          const seat=stationPositions.heavy;
+          eye=seat.map((n,i)=>n+(i===1?HEAVY_PIVOT:0)-forward[i]*.72+vertical[i]*(SIGHT_RISE+.055*(1-aimBlend))) as Vec3;
+          field.trackMount(yaw+sway,viewPitch);
+        }
         const target = eye.map((n,i)=>n+forward[i]) as Vec3;
         const q=quat.fromLookAt(rotation,eye,target,up);
         world.set(camera,Transform,{pos:eye,quat:q}).unwrap();
@@ -424,7 +457,7 @@ export const voxelRange: Plugin.Object = {
       }
 
       function beginWave(level:number){
-        if(!restored || phase==='run' || !Number.isSafeInteger(level) || level<1 || level>wallet.bestWave+1)return;
+        if(!restored || warmFrames || phase==='run' || !Number.isSafeInteger(level) || level<1 || level>wallet.bestWave+1)return;
         for(const entity of dynamicEntities)world.despawn(entity).unwrap();
         dynamicEntities.clear();largeMeshes.clear();zombies.length=0;tracers.length=0;blood.clear();fragments.reset();
         wave=level;spawnedCount=0;spawnIn=0;hp=100;kills=shots=0;
@@ -449,7 +482,8 @@ export const voxelRange: Plugin.Object = {
 
       function updateDamagedMesh(zombie: Zombie, part: number) {
         const old = zombie.damaged.get(part);
-        const boxes = remainingBoxes(zombie.body, part);
+        const {runs,painted}=outfitsByPart[zombie.outfit][part];
+        const boxes=visibleRuns(runs,painted,zombie.body.alive[part]);
         const wounds = boxes.length ? woundDetails(zombie.body, part) : [];
         zombie.wounds[part] = wounds.length;
         if (!boxes.length) {
@@ -457,7 +491,7 @@ export const voxelRange: Plugin.Object = {
           zombie.damaged.delete(part);
           return;
         }
-        const handle = assets.create(mergeBoxes([...boxes.map(box=>dressVoxel(zombie.outfit,part,box)), ...wounds], zero)).unwrap();
+        const handle = assets.create(mergeBoxes([...boxes, ...wounds], zero)).unwrap();
         if (old !== undefined) world.set(old, MeshFilter, { assetHandle: handle }).unwrap();
         else {
           const entity = world.spawn(
@@ -548,13 +582,13 @@ export const voxelRange: Plugin.Object = {
         }
         return best?{position:best}:undefined;
       }
-      function fieldRound(from:Vec3,to:Vec3,radius:number){
+      function fieldRound(from:Vec3,to:Vec3,radius:number,power=1){
         const delta=sub(to,from),length=Math.max(.01,Math.hypot(...delta)),dir=normalized(delta);
         if(tracers.length>=36)tracers.shift();
         tracers.push({start:[...from],end:[...to],life:.16,width:radius?.075:.033});
         if(!radius){
           const hit=nearest(from,dir,firstBuilding(from,dir,length+.9));
-          if(hit)damage(hit.zombie,hit.hit,dir,true,14);return;
+          if(hit)damage(hit.zombie,hit.hit,dir,true,power>1?28:14,power);return;
         }
         blastCount++;
         if(bursts.length>=18)bursts.shift();
@@ -577,7 +611,10 @@ export const voxelRange: Plugin.Object = {
       }
 
       function shoot() {
-        if(field?.mounted){field.mountFire(aimPoint());return;}
+        if(field?.mounted){
+          if(field.mountFire(aimPoint())){shots++;if(field.mounted==='heavy')kick=Math.min(.09,kick+.032);}
+          return;
+        }
         const rounds=ammo[weapon];
         if (reload>0 || cooldown>0) return;
         if (!rounds.loaded) { beginReload(); return; }
@@ -621,7 +658,7 @@ export const voxelRange: Plugin.Object = {
         if((phase!=='run' && phase!=='supply')||!restored)return;
         const buying=!wallet.owned.includes(gun);
         if(phase==='run' && (buying || (gun!==wallet.primary && gun!==wallet.secondary)))return;
-        if(!equip(wallet,gun)){tell('请检查解锁前置与赏金');state();return;}
+        if(phase==='supply' && !equip(wallet,gun)){tell('请检查解锁前置与赏金');state();return;}
         if(gun!==weapon){weapon=gun;reload=kick=sway=0;cooldown=.18;world.set(feed,MeshFilter,{assetHandle:feeds[gun]}).unwrap();world.set(viewGun,MeshFilter,{assetHandle:gunMeshes[gun]}).unwrap();}
         if(buying)tell('已购入 '+ARMORY[gun].name);
         if(phase==='supply')save();
@@ -645,7 +682,7 @@ export const voxelRange: Plugin.Object = {
           world.set(viewGun,MeshFilter,{assetHandle:gunMeshes[weapon]}).unwrap();world.set(feed,MeshFilter,{assetHandle:feeds[weapon]}).unwrap();restored=true;state();}
         if(data?.type==='status')state();
         if(data?.type==='retry' && phase==='down')beginWave(wave);
-        if(data?.type==='skip' && phase==='intro' && restored){
+        if(data?.type==='skip' && phase==='intro' && restored && !warmFrames){
           if(wallet.bestWave){phase='choose';state();}else beginWave(1);
         }
         if(data?.type==='choose' && phase==='supply'){phase='choose';state();}
@@ -678,7 +715,9 @@ export const voxelRange: Plugin.Object = {
           }
           if(phase==='run' && restored){
             reinforce(dt);
-            for(const [i,g] of GUNS.entries())if(press('Digit'+(i+1)))selectGun(g);
+            if(press('Digit1') && wallet.primary)selectGun(wallet.primary);
+            else if(press('Digit2'))selectGun(wallet.secondary);
+            else if(mouse?.pointerLocked && mouse.wheelDelta && wallet.primary)selectGun(otherCarriedGun(wallet,weapon));
             if(weapon==='mosin' && press('KeyV')){zoom=nextZoom(zoom);state();}
             aiming=!!mouse?.pointerLocked && mouse.button(2);
             aimBlend+=(Number(aiming)-aimBlend)*Math.min(1,dt*16);
@@ -701,7 +740,7 @@ export const voxelRange: Plugin.Object = {
             const ground=DECK;
             if(!field?.mounted && press('Space')&&feet<=ground+.001)jumpSpeed=6.8;
             jumpSpeed-=18*dt;feet=Math.max(ground,feet+jumpSpeed*dt);if(feet===ground)jumpSpeed=0;
-            x=Math.max(-3.98,Math.min(3.98,x+(Math.cos(yaw)*horiz+Math.sin(yaw)*ahead)*speed));
+            x=Math.max(-WALK_X,Math.min(WALK_X,x+(Math.cos(yaw)*horiz+Math.sin(yaw)*ahead)*speed));
             z=Math.max(.43,Math.min(6.32,z+(Math.sin(yaw)*horiz-Math.cos(yaw)*ahead)*speed));
             if(moving)stride+=dt*9;
             if(!field?.mounted && press('KeyR'))beginReload();
@@ -717,7 +756,7 @@ export const voxelRange: Plugin.Object = {
             const px=eye[0]-16+wrap(drop.x+elapsed*drop.speed*.13-eye[0]+16,32);
             const pz=eye[2]-16+wrap(drop.z-eye[2]+16,32);
             const py=wrap(drop.y-elapsed*drop.speed,12);
-            if(Math.abs(px)<4.8 && pz>-.3 && pz<7.1 && py<DECK+3.8)continue;
+            if(Math.abs(px)<DECK_HALF+.3 && pz>-.3 && pz<7.1 && py<DECK+3.8)continue;
             const depth=(px-eye[0])*forward[0]+(py-eye[1])*forward[1]+(pz-eye[2])*forward[2];
             if(depth < -rainRadius)continue;
             drop.matrix[12]=px;
@@ -831,6 +870,7 @@ export const voxelRange: Plugin.Object = {
             tracerBatch.push(transform);
           }
           tracerBatch.publish();
+          if(warmFrames>0 && --warmFrames===0)state();
           if (now - lastState > 180) {
             lastState = now;
             state();

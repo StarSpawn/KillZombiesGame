@@ -10,9 +10,9 @@ export default async function playthrough(play){
   await page.locator('.capture').click();
   let mx=640,my=360;
   await page.mouse.move(mx,my);
-  await page.keyboard.down('KeyD');await advance(2);await page.keyboard.up('KeyD');
-  let s=await state();assert.ok(s.x>3.7 && s.x<=4);
-  await page.keyboard.down('KeyA');await advance(.70);await page.keyboard.up('KeyA');
+  await page.keyboard.down('KeyD');await advance(3);await page.keyboard.up('KeyD');
+  let s=await state();assert.ok(s.x>12.9 && s.x<=13);
+  await page.keyboard.down('KeyA');await advance(2.30);await page.keyboard.up('KeyA');
   await advance(2.3);s=await state();
   assert.ok(s.spawned>1 && s.total===8 && s.hp===100);
   const scan=async(angle,name)=>{
@@ -24,9 +24,9 @@ export default async function playthrough(play){
     const view=await state();assert.ok(Math.abs(view.yaw-angle)<.05);
     await shot(name);
   };
-  await scan(-1.35,'FB-016-west-fence');
+  await scan(-1.67,'FB-016-west-fence');
   await scan(-Math.PI,'FB-016-rear-rail-yard');
-  await scan(-4.9,'FB-016-east-fence');
+  await scan(-4.60,'FB-016-east-fence');
   await scan(-2*Math.PI,'FB-015-west-berlin');
   // Return yaw to its original turn before using absolute aiming targets.
   await scan(0,'FB-017-street-entrances');
@@ -58,12 +58,19 @@ export default async function playthrough(play){
   await page.mouse.up({button:'right'});
   s=await state();assert.equal(s.phase,'supply','After defense '+JSON.stringify([s.phase,s.hp,s.kills,s.shots,s.bodies.map(b=>b.hits)]));
   assert.equal(s.cash,120);await shot('cleared-wave-supply');
+  await click('inspect-mosin');
+  assert.match(await page.locator('[data-ui-action="buy-mosin"]').innerText(),/120/);
   await click('buy-mosin');await play.waitFor(s=>s.weapon==='mosin' && s.cash===0,{read});
   await click('shop-close');await phase('choose');await shot('next-wave-options');
   assert.match(await page.locator('[data-choice="1"]').innerText(),/普通丧尸 × 12/);
   await click('wave-1');await phase('run');
   s=await state();assert.equal(s.wave,2);assert.equal(s.total,12);assert.equal(s.hp,100);
   await page.locator('.capture').click();await advance(.15);
+  assert.deepEqual(s.carried,['mosin','g18']);
+  await page.mouse.wheel(0,120);await advance(.18);
+  assert.equal((await state()).weapon,'g18');
+  await page.mouse.wheel(0,-120);await advance(.18);
+  assert.equal((await state()).weapon,'mosin');
   for(let i=0;i<28 && !(await state()).bodies.some(b=>b.z>-24);i++)await advance(1.5);
   await shot('FB-019-mosin-model');await page.mouse.down({button:'right'});await advance(.42);
   let magnified=await state();assert.ok(magnified.aiming && magnified.zoom===2);
@@ -96,5 +103,5 @@ export default async function playthrough(play){
   await click('skip');await phase('choose');
   assert.ok((await state()).owned.includes('mosin'));await click('wave-0');
   s=await phase('run');assert.equal(s.wave,1);
-  return {firstWave:8,nextWave:12,best:s.bestWave,retained:s.owned};
+  return {firstWave:8,nextWave:12,best:s.bestWave,retained:s.owned,carried:s.carried};
 }
