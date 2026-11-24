@@ -7,7 +7,7 @@ export type ViewPiece=Box & {rise?:number; taper?:number; roll?:number};
 function piece(x:number,y:number,z:number,sx:number,sy:number,sz:number,color:number,rise=0,taper=1):ViewPiece {
   return {x,y,z,sx,sy,sz,color,rise,taper};
 }
-export const sightHeight:Record<Gun,number>={g18:.099,ak:.176,shotgun:.116,mosin:.146};
+export const sightHeight:Record<Gun,number>={g18:.099,ak:.176,shotgun:.116,mosin:.146,lmg:.139,rocket:.15};
 export function gunBoxes(gun:Gun):ViewPiece[] {
   const p=piece, parts:ViewPiece[]=[];
   if(gun==='g18'){
@@ -23,6 +23,13 @@ export function gunBoxes(gun:Gun):ViewPiece[] {
       for(let i=0;i<5;i++)parts.push(p(side*.035,.056,.016+i*.012,.003,.038,.005,0,.002));
     }
     parts.push(p(.037,.066,-.072,.008,.028,.064,0),p(.041,.070,-.075,.004,.017,.048,2));
+  }else if(gun==='rocket'){
+    parts.push(p(0,.06,-.15,.14,.15,.86,9),p(0,.06,-.37,.16,.17,.17,6),p(0,.06,.22,.17,.18,.13,1),
+      p(0,-.04,-.06,.06,.15,.08,3),p(-.075,.13,-.2,.022,.1,.027,1),p(0,.06,-.65,.11,.12,.22,6,0,.25));
+  }else if(gun==='lmg'){
+    parts.push(p(0,.04,-.1,.105,.12,.40,4),p(0,.025,.19,.075,.11,.22,3,-.04),p(0,.055,-.47,.045,.05,.46,1),
+      p(0,.04,-.33,.1,.09,.23,3),p(0,-.07,-.11,.17,.16,.14,9),p(0,.11,-.62,.024,.075,.025,4));
+    for(const sign of [-1,1])parts.push({...p(sign*.06,-.07,-.52,.014,.18,.018,1),roll:sign*.33});
   }else if(gun==='ak'){
     parts.push(p(0,.035,-.078,.081,.093,.307,4),p(0,.092,-.080,.078,.049,.27,11,0,.91),
       p(0,.014,.161,.069,.093,.205,3,-.04,.84),p(0,-.01,.26,.073,.103,.027,9),
@@ -60,6 +67,8 @@ export function gunBoxes(gun:Gun):ViewPiece[] {
   return parts;
 }
 export function feedBoxes(gun:Gun):ViewPiece[]{
+  if(gun==='rocket')return [piece(0,.06,-.54,.11,.11,.15,6)];
+  if(gun==='lmg')return [piece(0,-.12,-.12,.17,.14,.13,9)];
   if(gun==='mosin')return [piece(0,.077,-.084,.040,.026,.073,7)];
   if(gun==='shotgun')return [piece(0,-.012,-.16,.031,.031,.069,8),piece(0,-.012,-.122,.033,.033,.012,7)];
   if(gun==='g18')return [piece(0,-.146,.025,.059,.100,.060,4),piece(0,-.197,.026,.077,.014,.072,0)];

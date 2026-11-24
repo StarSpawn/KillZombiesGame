@@ -6,19 +6,21 @@ import { PARTS, createBodyDamage, breakAt, remainingBoxes } from '../fracture.ts
 import { outfits, dressVoxel } from '../outfits.ts';
 
 describe('street escape', () => {
-  it('issues three magazines and conserves their rounds on a partial reload', () => {
+  it('issues the wave pistol reserve and conserves rounds on a partial reload', () => {
     const {g18}=ammunition();
-    expect(g18).toEqual({loaded:17,spare:34});
+    expect(g18).toEqual({loaded:17,spare:68});
     g18.loaded-=5;
     refill(g18,17);
-    expect(g18).toEqual({loaded:17,spare:29});
+    expect(g18).toEqual({loaded:17,spare:63});
     refill(g18,17);
-    expect(g18.spare).toBe(29);
+    expect(g18.spare).toBe(63);
   });
   it('charges for a weapon only on its first successful purchase', () => {
     const wallet=initialWallet();
     expect(equip(wallet,'ak')).toBe(false);
-    wallet.cash=150;
+    wallet.cash=270;
+    expect(equip(wallet,'ak')).toBe(false);
+    expect(equip(wallet,'mosin')).toBe(true);
     expect(equip(wallet,'ak')).toBe(true);
     expect(equip(wallet,'ak')).toBe(true);
     expect(equip(wallet,'shotgun')).toBe(true);

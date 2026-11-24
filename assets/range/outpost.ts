@@ -1,6 +1,6 @@
 import type { Box, Vec3 } from './fracture.ts';
 
-export const DECK=4.6, FENCE_Z=-6, MAX_LIVE=12;
+export const DECK=4.6, FENCE_Z=-6, MAX_LIVE=28;
 // Shared street coordinates keep entrances aligned with the district mesh.
 export const CITY_SHIFT=18, ENTRY_X=33, FRONT=-17-CITY_SHIFT, ROOF_Y=7, WINDOW_Y=3.1;
 export const entryKinds=['alley','shop','window','roof'] as const;
@@ -36,6 +36,18 @@ for(const y of [DECK+.42,DECK+.84])add(0,y,6.65,8.5,.09,.09,4);
 add(0,DECK+3.69,3.4,9.6,.22,7.4,5);
 add(0,DECK+3.54,.05,8.65,.14,.24,6);
 for(const x of [-3.3,3.3])add(x,DECK+3.43,.42,.73,.10,.31,13);
+// The striped rear loading hoist marks the truck interaction point from the deck.
+add(3,DECK+.05,5.92,1.55,.08,1.05,9);
+for(let n=0;n<5;n++)add(2.42+n*.29,DECK+.10,5.92,.13,.025,1.0,8);
+add(4.13,DECK+1.34,5.92,.18,2.68,.22,3);
+add(3.72,DECK+2.55,5.92,1.08,.18,.20,4);
+add(3.28,DECK+1.68,5.92,.035,1.55,.035,5);
+add(3.27,DECK+.8,6.38,1.3,.42,.51,6);
+for(const side of [-1,1]){
+  add(side*11,3,-8,.24,6,.24,5);
+  add(side*11,6.18,-8,1.02,.42,.52,3);
+  add(side*11,6.18,-7.72,.85,.28,.035,13);
+}
 // One panel is instanced in both directions; the two middle bays break with the gate.
 export const panel:Piece[]=[];
 export const fenceBays=Array.from({length:88},(_,i)=>i-44).filter(i=>i!==-1 && i!==0);

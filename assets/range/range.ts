@@ -4,7 +4,7 @@ import { createBoxGeometry, createMeshBuilder } from '@forgeax/engine/geometry';
 import { FRAME_START_SCAN_SYSTEM_NAME, INPUT_SNAPSHOT_RESOURCE_KEY, type InputSnapshot } from '@forgeax/engine/input';
 import { color, mat4, quat } from '@forgeax/engine/math';
 import type { Plugin } from '@forgeax/engine/plugin';
-import { Camera, DirectionalLight, Fog, FogModeValue, Instances, Materials, MeshFilter, MeshRenderer, ShadowParticipation, Skylight, perspective } from '@forgeax/engine/render';
+import { Camera, DirectionalLight, Fog, FogModeValue, Instances, Materials, MeshFilter, MeshRenderer, PointLight, ShadowParticipation, Skylight, perspective } from '@forgeax/engine/render';
 import { Transform } from '@forgeax/engine/scene';
 import type { Asset, AssetHandle, MeshAsset } from '@forgeax/engine/types';
 import { FragmentPool, PARTS, SMALL_LIMIT, hitPart, createBodyDamage, remainingBoxes, breakAt, type BodyDamage, type Hit, type Fragment, type Box, type Vec3 } from './fracture.ts';
@@ -14,6 +14,10 @@ import { BloodPool, BLOOD_COLORS, BLOOD_LIMIT } from './blood.ts';
 import { SHOTGUN_PELLETS } from './weapons.ts';
 import { GUNS, ARMORY, BOUNTY, MOSIN_IMPACT, nextZoom, scopeFov, shotOffset, ammunition, equip, initialWallet, restoreWallet, refill, type Gun } from './loadout.ts';
 import { gunBoxes, type ViewPiece, sightHeight, gunColors, supportHand, feedBoxes, reloadPose } from './gun-model.ts';
+import { Field } from './field.ts';
+import { fieldColors, fieldModel, stationPositions } from './field-models.ts';
+import { purchase } from './loadout.ts';
+import { orderName, techById } from './technology.ts';
 import { waveCount, waveChoices } from './waves.ts';
 import { DECK, FENCE_Z, MAX_LIVE, entryKind, entryPath, panel, fenceBays, outpost, gate, colors } from './outpost.ts';
 import { surfaceTexture, type Surface } from './surfaces.ts';
@@ -252,6 +256,14 @@ export const voxelRange: Plugin.Object = {
         i+=grouped?8:1;
       }
       const fence=mesh(retain(viewModel(gate,sceneColors)),bodyMaterial,zero,unit);
+      const lampWarm=retain(Materials.unlit('#ffc88b')), lampAlarm=retain(Materials.unlit('#ee6048'));
+      for(const side of [-1,1]){
+        const x=side*11;
+        mesh(boxMesh,lampWarm,[x,6.18,-7.67],[.8,.24,.06]);
+        mesh(boxMesh,lampAlarm,[x,6.65,-8],[.19,.24,.19]);
+        spawned.push(world.spawn({component:Transform,data:{pos:[x,4.3,-10]}},
+          {component:PointLight,data:{color:color.linearRgb(0xffb371),intensity:65,range:13}}).unwrap());
+      }
       const crowdSize=MAX_LIVE+8;
       const gunMeshes = Object.fromEntries(GUNS.map(g => [g, retain(viewModel(gunBoxes(g), tintPalette(gunColors))) ])) as Record<Gun, AssetHandle<'mesh'>>;
       const viewGun = mesh(gunMeshes.g18, bodyMaterial, [0,-20,0], unit);
@@ -276,8 +288,19 @@ export const voxelRange: Plugin.Object = {
       let remainsCount = 0;
       const footBatch = batch(boxMesh, footMaterial, crowdSize);
 
-      const mist=color.linearRgb(0x667784);
-      const fog=world.spawn({component:Fog,data:{mode:FogModeValue.linear,color:mist,near:17,far:130,maxOpacity:.98}}).unwrap();
+      const fieldActors=new Map<string,EntityHandle>();
+      const modelColors=tintPalette(fieldColors);
+      function poseField(id:string,pos:Vec3|null,yaw=0){
+        let entity=fieldActors.get(id);
+        if(!entity && !pos)return;
+        if(!entity){entity=mesh(retain(viewModel(fieldModel(id),modelColors)),bodyMaterial,pos!,unit);fieldActors.set(id,entity);}
+        world.set(entity,Transform,{pos:pos??[0,-80,0],quat:quat.fromEuler(quat.create(),0,yaw,0,'XYZ')}).unwrap();
+      }
+      const bursts:{pos:Vec3;radius:number;life:number}[]=[];
+      const sparks=batch(boxMesh,retain(Materials.unlit('#ffac51')),72,false);
+      const smoke=batch(boxMesh,retain(Materials.standard({baseColor:'#525959',roughness:1})),72,false);
+      const mist=color.linearRgb(0x506563);
+      const fog=world.spawn({component:Fog,data:{mode:FogModeValue.linear,color:mist,near:23,far:113,maxOpacity:.98}}).unwrap();
       const rainCount=620;
       const rainfall=batch(boxMesh,retain(Materials.unlit('#899aa2')),rainCount,false);
       const rainRotation=quat.fromEuler(quat.create(),0,0,.13,'XYZ');
@@ -292,10 +315,10 @@ export const voxelRange: Plugin.Object = {
       });
       const wrap=(v:number,span:number)=>v-span*Math.floor(v/span);
       const light = world.spawn({ component: DirectionalLight, data: {
-        direction: [0.66, -0.51, -0.55], color: color.linearRgb(0xc2ced7), intensity: 1.18, castShadow:true,
+        direction: [0.66, -0.51, -0.55], color: color.linearRgb(0xc1d7d1), intensity: 1.18, castShadow:true,
       } }).unwrap();
       const rim = world.spawn({ component: DirectionalLight, data: {
-        direction: [-0.72, -0.42, 0.45], color: color.linearRgb(0x9eacba), intensity: .35,
+        direction: [-0.72, -0.42, 0.45], color: color.linearRgb(0xffad6c), intensity: .57,
       } }).unwrap();
       const ambient = world.spawn({ component: Skylight, data: {
         color: color.linearRgb(0xb3c2cd), groundColor: color.linearRgb(0x53565b), intensity: .67,
@@ -315,6 +338,8 @@ export const voxelRange: Plugin.Object = {
       let wave=1, spawnedCount=0, spawnIn=0;
       let hp = 100, kills = 0, shots = 0, hurt = 0;
       let weapon: Gun = 'g18', wallet = initialWallet(), ammo = ammunition(), restored = false;
+      let field:Field|null=null;
+      let blastCount=0;
       let zoom=2;
       let cooldown = 0, reload = 0, aiming = false, recoil = 0, aimBlend = 0;
       let kick=0,sway=0;
@@ -326,14 +351,17 @@ export const voxelRange: Plugin.Object = {
       let width = 0, height = 0, lastFov = -1, lastState = 0;
       function snapshot() {
         return {phase,hp,kills,shots,weapon,cash:wallet.cash,owned:wallet.owned,bestWave:wallet.bestWave,
-          wave,total:waveCount(wave),spawned:spawnedCount,choices:waveChoices(wallet.bestWave,wave),
+          tech:wallet.tech,carried:[wallet.primary,wallet.secondary].filter(Boolean),trial:wallet.trial,order:field?.order?orderName(field.order):'',calls:field?.calls??0,
+          blastCount,truckDocked:(field?.arrival??0)>=4,commandCount:field?.orders().length??0,truckUses:field?.truckUses??0,dropIn:field?.dropIn??0,dropWaiting:!!field?.drop && field.dropIn===0,
+          mounted:field?.mounted??null,mountAmmo:field?.mounted?field.belts[field.mounted]:0,
+          prompt:field?.prompt([x,feet,z])??'',wave,total:waveCount(wave),spawned:spawnedCount,choices:waveChoices(wallet.bestWave,wave),
           zoom,loaded:ammo[weapon].loaded,spare:ammo[weapon].spare,aiming,reload,hitMarker,hurt,notice,ready:restored};
       }
       function state() { port?.postMessage({ type: 'state', ...snapshot() }); }
       function save() { if (restored) port?.postMessage({ type: 'save', wallet }); }
       function tell(text: string, duration = 1.7) { notice = text; noticeFor = duration; }
       function finishWave(cleared:boolean){
-        phase=cleared?'supply':'down';aiming=false;reload=0;
+        phase=cleared?'supply':'down';if(field)field.mounted=null;aiming=false;reload=0;
         gameHost.setPointerLockAllowed?.(false);
         if(cleared)wallet.bestWave=Math.max(wallet.bestWave,wave);
         else world.set(fence,Transform,{pos:[0,-2.7,0]}).unwrap();
@@ -361,7 +389,7 @@ export const voxelRange: Plugin.Object = {
 
       function placeCamera() {
         const viewport = gameHost.drawingBufferSize?.();
-        const scoped=weapon==='mosin';
+        const scoped=weapon==='mosin' && !field?.mounted;
         const aimFov=scoped?scopeFov(zoom):.93;
         const fov=1.25+(aimFov-1.25)*aimBlend;
         eye = [x,1.68+feet+Math.sin(stride)*.026,z];
@@ -379,7 +407,7 @@ export const voxelRange: Plugin.Object = {
         const progress=reload>0?1-reload/ARMORY[weapon].reload:0;
         const pose=reloadPose(weapon,progress);
         const offX=.22*(1-aimBlend)-pose.lift*.6, offY=-.22*(1-aimBlend)-sightHeight[weapon]*aimBlend+pose.lift;
-        const gunPos=eye.map((n,i)=>n+forward[i]*(.50+({g18:.015,ak:.13,shotgun:.14,mosin:.145}[weapon])*aimBlend-.055*recoil)+right[i]*offX+vertical[i]*offY) as Vec3;
+        const gunPos=eye.map((n,i)=>n+forward[i]*(.50+({g18:.015,ak:.13,shotgun:.14,mosin:.145,lmg:.14,rocket:.18}[weapon])*aimBlend-.055*recoil)+right[i]*offX+vertical[i]*offY) as Vec3;
         const cos=Math.cos(pose.cant),sin=Math.sin(pose.cant);
         const gunUp=vertical.map((n,i)=>n*cos+right[i]*sin) as Vec3;
         const gunDirection=normalized(forward.map((n,i)=>n-right[i]*.19*(1-aimBlend)+vertical[i]*.068*(1-aimBlend)) as Vec3);
@@ -388,7 +416,7 @@ export const voxelRange: Plugin.Object = {
         const rigRight=normalized(cross(gunDirection,gunUp)),rigUp=cross(rigRight,gunDirection);
         const attach=(entity:EntityHandle,offset:Vec3,visible=true)=>{
           const pos=gunPos.map((n,i)=>n+rigRight[i]*offset[0]+rigUp[i]*offset[1]-gunDirection[i]*offset[2]) as Vec3;
-          world.set(entity,Transform,{pos:phase==='run' && visible && !(scoped && aimBlend>.90)?pos:[0,-20,0],quat:oriented}).unwrap();
+          world.set(entity,Transform,{pos:phase==='run' && !field?.mounted && visible && !(scoped && aimBlend>.90)?pos:[0,-20,0],quat:oriented}).unwrap();
         };
         attach(viewGun,zero);
         attach(hand,pose.hand);
@@ -402,8 +430,9 @@ export const voxelRange: Plugin.Object = {
         wave=level;spawnedCount=0;spawnIn=0;hp=100;kills=shots=0;
         x=0;z=1.85;feet=DECK;jumpSpeed=0;yaw=0;pitch=-.18;stride=0;
         hurt=hitMarker=cooldown=reload=aimBlend=recoil=kick=sway=0;aiming=false;lastImpact=null;
-        ammo=ammunition();
-        for(const g of GUNS)ammo[g].spare=Math.max(ammo[g].spare,waveCount(level)*(g==='shotgun'?3:8));
+        ammo=ammunition(wallet.tech.includes('pouch'));
+        bursts.length=0;blastCount=0;
+        field=new Field({pose:poseField,target:fieldTarget,round:fieldRound,tell,save},wallet,ammo);
         notice='';noticeFor=0;phase='run';
         world.set(fence,Transform,{pos:zero}).unwrap();
         gameHost.setPointerLockAllowed?.(true);placeCamera();state();
@@ -415,7 +444,7 @@ export const voxelRange: Plugin.Object = {
         const zombie:Zombie={source:entryKind(spawnedCount,wave),position,route,waypoint:1,motion:createMotion(),body:createBodyDamage(),swing:0,
           outfit:(spawnedCount*8+wave-1)%outfits.length,remainsUntil:0,damaged:new Map(),dirty:new Set(),wounds:[0,0,0,0,0,0]};
         walk(zombie.motion,zombie.body,position,route[1],0,0);
-        zombies.push(zombie);spawnedCount++;spawnIn=Math.max(.95,2.1-wave*.09);
+        zombies.push(zombie);spawnedCount++;spawnIn=Math.max(.28,2.1-wave*.12);
       }
 
       function updateDamagedMesh(zombie: Zombie, part: number) {
@@ -442,10 +471,10 @@ export const voxelRange: Plugin.Object = {
         assets.release(handle).unwrap();
       }
 
-      function damage(zombie: Zombie, hit: Hit, direction: Vec3, effects: boolean, bloodCount = 26) {
+      function damage(zombie: Zombie, hit: Hit, direction: Vec3, effects: boolean, bloodCount = 26, strength=1) {
         const pose = zombie.motion.parts[hit.part];
         const previousLimbs = zombie.body.missingLimbs;
-        const result = breakAt(zombie.body, hit, normalized(localVector(pose, direction)),weapon==='mosin'?MOSIN_IMPACT:1);
+        const result = breakAt(zombie.body, hit, normalized(localVector(pose, direction)),strength);
         lastImpact={part:hit.part,collapsed:result.collapsed};
         if (!result.removed.length) return;
         if (result.collapsed && effects) zombie.remainsUntil = world.getResource(Time).elapsed + remainsLifetime;
@@ -483,11 +512,11 @@ export const voxelRange: Plugin.Object = {
         if (result.collapsed) { kills++; wallet.cash += BOUNTY; tell('击杀  +$'+BOUNTY); save(); }
       }
 
-      function nearest(origin: Vec3, direction: Vec3, wall: number) {
+      function nearest(origin: Vec3, direction: Vec3, wall: number,skip?:Zombie) {
         let closest = wall;
         let result: { zombie: Zombie; hit: Hit } | undefined;
         for (const zombie of zombies) {
-          if (zombie.body.destroyed) continue;
+          if (zombie.body.destroyed || zombie===skip) continue;
           const dx = zombie.position[0] - origin[0], dy = zombie.position[1]+1.1 - origin[1], dz = zombie.position[2] - origin[2];
           const along = Math.max(0, dx * direction[0] + dy * direction[1] + dz * direction[2]);
           if (dx * dx + dy * dy + dz * dz - along * along > 6.25) continue;
@@ -502,13 +531,60 @@ export const voxelRange: Plugin.Object = {
         return result;
       }
 
+      function aimPoint():Vec3{
+        const ground=forward[1]<-.001?Math.min(100,-eye[1]/forward[1]):100;
+        const wall=firstBuilding(eye,forward,ground), hit=nearest(eye,forward,wall);
+        return eye.map((v,i)=>v+forward[i]*(hit?.hit.t??wall)) as Vec3;
+      }
+      function fieldTarget(from:Vec3,area?:Vec3,radius=0){
+        let best:Vec3|null=null,score=-Infinity;
+        for(const zombie of zombies){
+          const p=zombie.position;
+          if(zombie.body.destroyed || p[2]<=score || (area && Math.hypot(p[0]-area[0],p[2]-area[2])>radius))continue;
+          const t=toWorld(zombie.motion.parts[1],PARTS[1].pivot);
+          const delta=sub(t,from),len=Math.hypot(...delta);
+          if(firstBuilding(from,normalized(delta),len)<len-.1)continue;
+          score=p[2];best=t;
+        }
+        return best?{position:best}:undefined;
+      }
+      function fieldRound(from:Vec3,to:Vec3,radius:number){
+        const delta=sub(to,from),length=Math.max(.01,Math.hypot(...delta)),dir=normalized(delta);
+        if(tracers.length>=36)tracers.shift();
+        tracers.push({start:[...from],end:[...to],life:.16,width:radius?.075:.033});
+        if(!radius){
+          const hit=nearest(from,dir,firstBuilding(from,dir,length+.9));
+          if(hit)damage(hit.zombie,hit.hit,dir,true,14);return;
+        }
+        blastCount++;
+        if(bursts.length>=18)bursts.shift();
+        bursts.push({pos:[...to],radius,life:.55});
+        for(const zombie of zombies){
+          if(zombie.body.destroyed)continue;
+          const p=zombie.position,d=Math.hypot(p[0]-to[0],p[1]+.9-to[1],p[2]-to[2]);
+          if(d>radius)continue;
+          const part=d<radius*.7?1:0,brick=zombie.body.alive[part].findIndex(Boolean);if(brick<0)continue;
+          const b=PARTS[part].boxes[brick],out=normalized([p[0]-to[0],.9,p[2]-to[2]]);
+          damage(zombie,{part,brick,t:0,point:[b.x,b.y,b.z]},out,true,24,5.5);
+          if(part===1 && !zombie.body.destroyed){
+            for(let i=0;i<3 && !zombie.body.destroyed;i++){
+              const next=zombie.body.alive[1].findIndex(Boolean);if(next<0)break;
+              const box=PARTS[1].boxes[next];
+              damage(zombie,{part:1,brick:next,t:0,point:[box.x,box.y,box.z]},out,true,8,4);
+            }
+          }
+        }
+      }
+
       function shoot() {
+        if(field?.mounted){field.mountFire(aimPoint());return;}
         const rounds=ammo[weapon];
         if (reload>0 || cooldown>0) return;
         if (!rounds.loaded) { beginReload(); return; }
         rounds.loaded--; shots++; cooldown=ARMORY[weapon].interval; recoil=1;
         const count=weapon==='shotgun'?SHOTGUN_PELLETS:1;
         const muzzle=eye.map((n,i)=>n+right[i]*.17*(1-aimBlend)-vertical[i]*.14+forward[i]*.64) as Vec3;
+        const pushed=new Set<Zombie>();
         for(let p=0;p<count;p++){
           const offset=shotOffset(weapon,shots,p,aiming,kick);
           if(!p)lastSpread=offset;
@@ -519,7 +595,17 @@ export const voxelRange: Plugin.Object = {
           const end=eye.map((n,i)=>n+direction[i]*length) as Vec3;
           if(tracers.length>=36)tracers.shift();
           tracers.push({start:muzzle,end,life:.065,width:.012});
-          if(impact)damage(impact.zombie,impact.hit,direction,true,count>1?12:28);
+          if(weapon==='rocket'){fieldRound(muzzle,end,4);continue;}
+          if(impact){
+            damage(impact.zombie,impact.hit,direction,true,count>1?12:28,weapon==='mosin'?MOSIN_IMPACT:1);
+            if(weapon==='lmg'){
+              const second=nearest(eye,direction,wall,impact.zombie);
+              if(second)damage(second.zombie,second.hit,direction,true,20);
+            }
+            if(weapon==='shotgun' && impact.hit.t<12 && pushed.size<3 && !pushed.has(impact.zombie)){
+              pushed.add(impact.zombie);impact.zombie.position[2]-=.85;
+            }
+          }
         }
         kick=Math.min(.15,kick+ARMORY[weapon].kick*(aiming?.66:1));
         sway=Math.sin(shots*2.4)*kick*.32;
@@ -531,12 +617,14 @@ export const voxelRange: Plugin.Object = {
         reload=ARMORY[weapon].reload;
       }
       function selectGun(gun:Gun) {
+        if(field?.mounted && phase==='run')return;
         if((phase!=='run' && phase!=='supply')||!restored)return;
         const buying=!wallet.owned.includes(gun);
-        if(buying && phase!=='supply')return;
-        if(!equip(wallet,gun)){tell('还差 $'+(ARMORY[gun].price-wallet.cash));state();return;}
+        if(phase==='run' && (buying || (gun!==wallet.primary && gun!==wallet.secondary)))return;
+        if(!equip(wallet,gun)){tell('请检查解锁前置与赏金');state();return;}
         if(gun!==weapon){weapon=gun;reload=kick=sway=0;cooldown=.18;world.set(feed,MeshFilter,{assetHandle:feeds[gun]}).unwrap();world.set(viewGun,MeshFilter,{assetHandle:gunMeshes[gun]}).unwrap();}
-        if(buying){tell('已购入 '+ARMORY[gun].name);save();}
+        if(buying)tell('已购入 '+ARMORY[gun].name);
+        if(phase==='supply')save();
         state();
       }
       function renderBlood(dt:number) {
@@ -553,15 +641,19 @@ export const voxelRange: Plugin.Object = {
 
       function message(event:MessageEvent) {
         const data=event.data;
-        if(data?.type==='restore' && !restored){wallet=restoreWallet(data.wallet);restored=true;state();}
+        if(data?.type==='restore' && !restored){wallet=restoreWallet(data.wallet);weapon=wallet.primary??wallet.secondary;
+          world.set(viewGun,MeshFilter,{assetHandle:gunMeshes[weapon]}).unwrap();world.set(feed,MeshFilter,{assetHandle:feeds[weapon]}).unwrap();restored=true;state();}
         if(data?.type==='status')state();
         if(data?.type==='retry' && phase==='down')beginWave(wave);
         if(data?.type==='skip' && phase==='intro' && restored){
           if(wallet.bestWave){phase='choose';state();}else beginWave(1);
         }
         if(data?.type==='choose' && phase==='supply'){phase='choose';state();}
-        if(data?.type==='supply' && phase==='choose'){phase='supply';state();}
+        if(data?.type==='supply' && (phase==='choose'||phase==='down')){phase='supply';state();}
         if(data?.type==='wave' && phase==='choose')beginWave(data.level);
+        if(data?.type==='tech' && phase==='supply' && restored && purchase(wallet,data.id)){
+          tell('已解锁 '+techById.get(data.id)!.name);save();state();
+        }
         if(data?.type==='gun' && GUNS.includes(data.gun))selectGun(data.gun);
       }
       placeCamera();state();
@@ -591,21 +683,28 @@ export const voxelRange: Plugin.Object = {
             aiming=!!mouse?.pointerLocked && mouse.button(2);
             aimBlend+=(Number(aiming)-aimBlend)*Math.min(1,dt*16);
             if(mouse?.pointerLocked) {
-              const sensitivity=aiming?(weapon==='mosin'?.0023/zoom:.0013):.0023;
+              const sensitivity=aiming?(weapon==='mosin' && !field?.mounted ? .0023/zoom:.0013):.0023;
               yaw+=mouse.movementDelta.x*sensitivity;
               pitch=Math.max(-1.35,Math.min(1.35,pitch-mouse.movementDelta.y*sensitivity));
             }
             const horiz=Number(!!keys?.downCode('KeyD'))-Number(!!keys?.downCode('KeyA'));
             const ahead=Number(!!keys?.downCode('KeyW'))-Number(!!keys?.downCode('KeyS'));
-            const moving=horiz!==0||ahead!==0;
-            const speed=(aiming?2.65:5.65)*dt/Math.max(1,Math.hypot(horiz,ahead));
+            const point:Vec3=[x,feet,z];
+            if(field){
+              if(press('KeyE')){field.interact(point);if(field.mounted){const p=stationPositions[field.mounted];x=p[0];z=p[2]+.65;reload=0;}}
+              if(press('KeyQ'))field.cycle();
+              if(press('KeyT'))field.execute(aimPoint(),[x,DECK,z],yaw);
+              field.tick(dt,spawnedCount);field.pickupDrop(point);
+            }
+            const moving=!field?.mounted&&(horiz!==0||ahead!==0);
+            const speed=(field?.mounted?0:aiming?2.65:5.65)*dt/Math.max(1,Math.hypot(horiz,ahead));
             const ground=DECK;
-            if(press('Space')&&feet<=ground+.001)jumpSpeed=6.8;
+            if(!field?.mounted && press('Space')&&feet<=ground+.001)jumpSpeed=6.8;
             jumpSpeed-=18*dt;feet=Math.max(ground,feet+jumpSpeed*dt);if(feet===ground)jumpSpeed=0;
             x=Math.max(-3.98,Math.min(3.98,x+(Math.cos(yaw)*horiz+Math.sin(yaw)*ahead)*speed));
             z=Math.max(.43,Math.min(6.32,z+(Math.sin(yaw)*horiz-Math.cos(yaw)*ahead)*speed));
             if(moving)stride+=dt*9;
-            if(press('KeyR'))beginReload();
+            if(!field?.mounted && press('KeyR'))beginReload();
             if(reload>0){reload=Math.max(0,reload-dt);if(!reload)refill(ammo[weapon],ARMORY[weapon].size);}
             const recovery=ARMORY[weapon].recovery*dt;
             kick=Math.max(0,kick-recovery);
@@ -630,7 +729,18 @@ export const voxelRange: Plugin.Object = {
           if(phase==='run' && restored && mouse?.pointerLocked && (mouse.justPressed(0)||mouse.button(0))) shoot();
           noticeFor-=dt;if(noticeFor<=0)notice='';
           hitMarker=Math.max(0,hitMarker-dt);hurt=Math.max(0,hurt-dt);
-          renderBlood(dt);
+          sparks.clear();smoke.clear();
+          for(let i=bursts.length-1;i>=0;i--){
+            const b=bursts[i],age=.55-b.life;
+            for(let j=0;j<4;j++){const a=j*2.4+i,spread=b.radius*(.12+age*.7);
+              const pos:Vec3=[b.pos[0]+Math.cos(a)*spread,b.pos[1]+age*(2+j)+.4,b.pos[2]+Math.sin(a)*spread];
+              const scale=b.radius*(age<.16?.33:.18+b.life*.4);
+              quat.fromEuler(rotation,a,age*2,a,'XYZ');mat4.compose(transform,pos,rotation,[scale,scale*1.4,scale]);
+              (age<.16?sparks:smoke).push(transform);
+            }
+            b.life-=dt;if(b.life<=0)bursts.splice(i,1);
+          }
+          sparks.publish();smoke.publish();renderBlood(dt);
           footBatch.clear();
           bodyBatches.forEach(layer => layer.clear());
           remainsBatch.clear();

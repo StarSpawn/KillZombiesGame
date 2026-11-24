@@ -10,7 +10,7 @@ function box(x:number,y:number,z:number,sx:number,sy:number,sz:number,hex:string
   const b={x,y,z,sx,sy,sz,color};district.push(b);return b;
 }
 const stone='#aaa393',cream='#cfbf9f',roof='#514f50',sill='#aea99a',pavement='#83817b';
-const panes=['#52616b','#7d8885','#b89c71','#45535b','#657376'];
+const panes=['#364b4e','#566664','#b49461','#253535','#51615b'];
 const glyphs:Record<string,string>={
   K:'101101110101101',I:'111010010010111',N:'101111111111101',O:'111101101101111',
   P:'110101110100100',S:'111100111001111',T:'111010010010010',A:'010101111101101',
@@ -118,6 +118,19 @@ for(let side of [-1,1]){
 }
 block(-6,-65,34,13,7,'#b9b6a8',true);
 block(23,-73,13,12,9,'#a8aaa4',true);
+// Two signal masts and a civil-defence sign frame the street without covering the entry routes.
+for(const side of [-1,1]){
+  const x=side*23;
+  box(x,10,-25,.22,20,.22,'#434e4d');
+  for(let i=0;i<4;i++)box(x,15+i*1.3,-25,3.6-i*.65,.09,.12,'#65726d');
+  box(x,20.05,-25,.23,.30,.23,'#bf5542');
+}
+shopSign('SPERRGEBIET',11,7.9,-16.4,'#743c34',.23);
+for(const x of [-8,8]){
+  box(x,2.15,-11,.22,4.3,.22,'#45504a');
+  box(x,3.25,-11,1.27,1.18,.19,'#804338');
+  box(x,3.26,-10.88,.76,.16,.045,'#d2c5a1');
+}
 // Move the entire western block together, including its shared collision boxes.
 for(const piece of district)if(piece.z<0)piece.z-=CITY_SHIFT;
 const lotEdge=-7.6-CITY_SHIFT;
